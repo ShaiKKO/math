@@ -27,7 +27,7 @@ if(HAVE_BOOST_TEST)
         enable_testing()
 
         set(CUDA_nvrtc_LIBRARY /usr/local/cuda/lib64/libnvrtc.so)
-        
+
         if (BOOST_MATH_NVRTC_CI_RUN)
             boost_test_jamfile(FILE nvrtc_jamfile LINK_LIBRARIES Boost::math Boost::assert Boost::concept_check Boost::config Boost::core Boost::integer Boost::lexical_cast Boost::multiprecision Boost::predef Boost::random Boost::static_assert Boost::throw_exception ${CUDA_nvrtc_LIBRARY} ${CUDA_LIBRARIES} ${CUDA_CUDA_LIBRARY} COMPILE_DEFINITIONS BOOST_MATH_NVRTC_CI_RUN=1 INCLUDE_DIRECTORIES ${CUDA_INCLUDE_DIRS} )
         else ()
@@ -49,6 +49,33 @@ if(HAVE_BOOST_TEST)
         boost_test(SOURCES check_cmake_version.cpp ARGUMENTS ${PROJECT_VERSION} LINK_LIBRARIES Boost::core Boost::config)
         add_subdirectory(compile_test)
 
+
+        # Cubature header-only smoke test
+        add_executable(cubature_smoke_test cubature_smoke_test.cpp)
+        target_include_directories(cubature_smoke_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+        if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+          target_compile_options(cubature_smoke_test PRIVATE -Wall -Wextra -Werror)
+        elseif (MSVC)
+          target_compile_options(cubature_smoke_test PRIVATE /W4 /WX)
+        endif()
+        enable_testing()
+        add_test(NAME cubature_smoke_test COMMAND cubature_smoke_test)
+
     endif()
 
 endif()
+
+# Fallback when BoostTestJamfile is unavailable
+if(NOT HAVE_BOOST_TEST)
+  add_executable(cubature_smoke_test cubature_smoke_test.cpp)
+  target_include_directories(cubature_smoke_test PRIVATE ${CMAKE_SOURCE_DIR}/include)
+  target_compile_features(cubature_smoke_test PRIVATE cxx_std_17)
+  if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    target_compile_options(cubature_smoke_test PRIVATE -Wall -Wextra -Werror)
+  elseif (MSVC)
+    target_compile_options(cubature_smoke_test PRIVATE /W4 /WX)
+  endif()
+  enable_testing()
+  add_test(NAME cubature_smoke_test COMMAND cubature_smoke_test)
+endif()
+

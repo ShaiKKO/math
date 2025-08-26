@@ -1,0 +1,55 @@
+name: cubature-smoke
+
+on:
+  push:
+    branches: [ main, master, develop, feature/** ]
+  pull_request:
+
+jobs:
+  build:
+    name: ${{ matrix.os }} / ${{ matrix.compiler }} / C++${{ matrix.cpp }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        cpp: [17, 20]
+        compiler: [gcc, clang, msvc]
+        exclude:
+          - os: windows-latest
+            compiler: gcc
+          - os: windows-latest
+            compiler: clang
+          - os: macos-latest
+            compiler: msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          if [[ "${{ matrix.compiler }}" == "gcc" ]]; then
+            sudo apt-get install -y g++-13
+            echo "CXX=g++-13" >> $GITHUB_ENV
+          else
+            sudo apt-get install -y clang-17
+            echo "CXX=clang++-17" >> $GITHUB_ENV
+          fi
+
+      - name: Select MSVC (Windows)
+        if: runner.os == 'Windows' && matrix.compiler == 'msvc'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v4
+
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_CXX_STANDARD=${{ matrix.cpp }} -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build smoke test
+        run: cmake --build build -j 2 --target cubature_smoke_test
+
+      - name: Run smoke test
+        run: ctest --test-dir build --output-on-failure -R cubature_smoke_test
+

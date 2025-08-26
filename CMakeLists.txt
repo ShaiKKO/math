@@ -54,8 +54,23 @@ elseif(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
 
   include(CTest)
   add_subdirectory(test)
-  
+
   include(GNUInstallDirs)
   install(DIRECTORY "include/" DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
 
+endif()
+
+# Optional: local docs target (Doxygen), for developer previews only
+find_package(Doxygen QUIET)
+if(DOXYGEN_FOUND)
+  add_custom_target(doc
+    COMMAND ${DOXYGEN_EXECUTABLE} Doxyfile
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/docs
+    COMMENT "Generating documentation with Doxygen"
+    VERBATIM)
+else()
+  add_custom_target(doc
+    COMMAND ${CMAKE_COMMAND} -E echo "Doxygen not found. Install doxygen to build docs."
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    VERBATIM)
 endif()

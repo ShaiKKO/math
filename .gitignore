@@ -29,3 +29,13 @@ cmake-build-debug/*
 build.ninja
 .ninja*
 a.out
+
+
+# Local docs outputs (Doxygen/Quickbook/Sphinx/etc.)
+/docs/
+/docs/build/
+/docs/html/
+/docs/output/
+/doc/html/
+**/Doxyfile.user
+**/doxygen/*
