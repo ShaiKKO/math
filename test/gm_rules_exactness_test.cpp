@@ -1,9 +1,9 @@
-#define BOOST_TEST_MODULE gm_rules_exactness
-#include <boost/test/unit_test.hpp>
+#include <cassert>
 #include <vector>
 #include <array>
 #include <cmath>
 #include <limits>
+#include <iostream>
 
 #include <boost/math/cubature/detail/gm_rules.hpp>
 
@@ -12,20 +12,27 @@ using namespace boost::math::cubature::detail::gm;
 template <class Real, int Deg, int Dim>
 void check_rule_exactness()
 {
+#if __cplusplus >= 201703L
   if constexpr (!available_v<Deg, Dim>) {
-    BOOST_TEST_MESSAGE("GM rule<" << Deg << "," << Dim << "> not available; skipping exactness checks.");
-    BOOST_CHECK(true);
-    return;
+    return; // skip silently
   }
+#endif
 
-  constexpr auto nodes = rule<Deg, Dim>::template nodes<Real>();
-  constexpr auto weights = rule<Deg, Dim>::template weights<Real>();
-  static_assert(nodes.size() == weights.size(), "nodes/weights size mismatch");
+  auto nodes = rule<Deg, Dim>::template nodes<Real>();
+  auto weights = rule<Deg, Dim>::template weights<Real>();
+
+  long double sumw = 0.0L;
+  for (auto w : weights) sumw += static_cast<long double>(w);
+  if (!(std::abs(sumw - 1.0L) < 1e-12L)) {
+    std::cerr << "Weight sum mismatch for Deg=" << Deg << ", Dim=" << Dim
+              << ": sumw=" << sumw << "\n";
+    std::abort();
+  }
 
   auto ref_monomial = [](const std::array<unsigned, Dim>& a) {
     long double ref = 1.0L;
     for (int i = 0; i < Dim; ++i) ref *= 1.0L / static_cast<long double>(a[i] + 1);
-    return ref; // integral over [0,1]^Dim of prod x_i^{a_i}
+    return ref;
   };
 
   auto quad_monomial = [&](const std::array<unsigned, Dim>& a) {
@@ -40,38 +47,44 @@ void check_rule_exactness()
     return s;
   };
 
-  auto within_tol = [](long double a, long double b) {
-    long double tol = 1e-12L;
-    return std::abs(a - b) <= tol * std::max<long double>(1.0L, std::abs(b));
-  };
-
-  // iterate all multi-indices with sum <= Deg
   std::array<unsigned, Dim> a{};
-  std::function<void(int, unsigned)> rec = [&](int idx, unsigned sum) {
-    if (idx == Dim) {
-      if (sum <= static_cast<unsigned>(Deg)) {
-        auto ref = ref_monomial(a);
-        auto quad = quad_monomial(a);
-        BOOST_CHECK(within_tol(ref, quad));
+  struct Rec {
+    decltype(quad_monomial)& quad; decltype(ref_monomial)& ref;
+    std::array<unsigned,Dim>& a; int DimC; int DegC;
+    void run(int idx, unsigned sum){
+      if (idx == DimC) {
+        if (sum <= static_cast<unsigned>(DegC)) {
+          long double r = ref(a);
+          long double q = quad(a);
+          long double diff = std::abs(r - q);
+          long double tol = 1e-12L * std::max<long double>(1.0L, std::abs(r));
+          if (!(diff <= tol)) {
+            std::cerr << "Exactness fail Deg=" << DegC << ", Dim=" << DimC << ", a=";
+            for (int i=0;i<DimC;++i) std::cerr << (i?",":"[") << a[i];
+            std::cerr << "] r=" << r << " q=" << q << " diff=" << diff << " tol=" << tol << "\n";
+            std::abort();
+          }
+        }
+        return;
       }
-      return;
-    }
-    unsigned max_k = static_cast<unsigned>(Deg);
-    for (unsigned k = 0; k <= max_k; ++k) {
-      a[idx] = k;
-      rec(idx+1, sum + k);
-    }
+      for (unsigned k = 0; k <= static_cast<unsigned>(DegC); ++k) { a[idx]=k; run(idx+1, sum+k);}    }
   };
-  rec(0, 0);
+  Rec{quad_monomial, ref_monomial, a, Dim, Deg}.run(0,0);
 }
 
-BOOST_AUTO_TEST_CASE(exactness_if_available)
+int main()
 {
   using Real = double;
-  // These calls will skip internally if tables are not yet available.
+  // Deg-5 (embedded) checks for 2D..5D
   check_rule_exactness<Real, 5, 2>();
-  check_rule_exactness<Real, 7, 2>();
   check_rule_exactness<Real, 5, 3>();
+  check_rule_exactness<Real, 5, 4>();
+  check_rule_exactness<Real, 5, 5>();
+  // Deg-7 checks for 2D..5D
+  check_rule_exactness<Real, 7, 2>();
   check_rule_exactness<Real, 7, 3>();
+  check_rule_exactness<Real, 7, 4>();
+  check_rule_exactness<Real, 7, 5>();
+  return 0;
 }
 

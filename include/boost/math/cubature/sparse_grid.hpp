@@ -1,3 +1,10 @@
+// Copyright 2025 Colin MacRitchie/Ripple Group
+// Use, modification and distribution are subject to the
+// Boost Software License, Version 1.0.
+// (See accompanying file LICENSE_1_0.txt
+// or copy at http://www.boost.org/LICENSE_1_0.txt)
+
+
 #ifndef BOOST_MATH_CUBATURE_SPARSE_GRID_HPP
 #define BOOST_MATH_CUBATURE_SPARSE_GRID_HPP
 
@@ -5,6 +12,7 @@
 #include <boost/math/cubature/regions.hpp>
 #include <boost/math/cubature/concepts.hpp>
 #include <boost/math/cubature/workspace.hpp>
+#include <boost/math/cubature/detail/sparse_grid_impl.hpp>
 
 namespace boost { namespace math { namespace cubature {
 
@@ -13,13 +21,16 @@ namespace boost { namespace math { namespace cubature {
 /// \details Implements nested Clenshaw–Curtis (default) or Gauss–Patterson 1-D
 ///  rules with node de-duplication; returns result<Real> with simple error proxy.
 
-// Sparse-grid Smolyak: API skeleton only
-
+/// \brief Integrate using Smolyak sparse grid
+/// \param f Integrand function
+/// \param box Integration domain  
+/// \param level Sparse grid level (controls accuracy)
+/// \param pol Boost.Math policy
 template <class Real, class F, class Policy = default_policy>
-inline result<Real> integrate_sparse_grid(const F& /*f*/, const hypercube<Real>& /*box*/,
-                                          unsigned /*level*/, Policy const& /*pol*/ = Policy{})
+inline result<Real> integrate_sparse_grid(const F& f, const hypercube<Real>& box,
+                                          unsigned level, Policy const& /*pol*/ = Policy{})
 {
-  return result<Real>{};
+  return detail::integrate_sparse_grid_impl<Real>(f, box, level);
 }
 
 // Overload with execution options and workspace
@@ -28,7 +39,7 @@ template <class Real, class F, class Policy = default_policy>
 inline result<Real> integrate_sparse_grid(const F& f, const hypercube<Real>& box,
                                           unsigned level,
                                           execution_options const& /*ex*/,
-                                          workspace* /*ws*/ = nullptr,
+                                          workspace<Real>* /*ws*/ = nullptr,
                                           Policy const& pol = Policy{})
 {
   return integrate_sparse_grid<Real, F, Policy>(f, box, level, pol);
