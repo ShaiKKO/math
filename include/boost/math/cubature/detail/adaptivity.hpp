@@ -39,7 +39,7 @@ struct region {
   // Constructor
   region(std::size_t dim = 0) 
     : a(dim), b(dim), estimate_coarse(0), estimate_fine(0), 
-      error(0), split_dim(0), evaluations(0), cached_values(nullptr) {}
+      error(0), split_dim(dim), evaluations(0), cached_values(nullptr) {}  // Initialize split_dim to dim (invalid)
   
   // Get dimension
   std::size_t dimension() const { return a.size(); }

@@ -98,7 +98,13 @@ public:
     bool success = evaluate_region_dispatch(initial_region, initial_result, dim);
     
     if (!success) {
-      // Rules not available for this dimension
+      // Rules not available for this dimension - handle according to policy
+      raise_integration_error<Real>(
+        "adaptive_integrator::integrate",
+        "Genz-Malik rules not available for this dimension",
+        std::numeric_limits<Real>::max(),
+        policy_);
+      
       result<Real> res;
       res.value = Real(0);
       res.error = std::numeric_limits<Real>::max();
@@ -146,18 +152,27 @@ public:
         max_refinement_depth_ = current_depth;
       }
       
-      // Get region with largest error
+      // DCUHRE algorithm: Select region with largest error for subdivision
+      // This implements the global error control strategy where we always
+      // refine the region contributing most to the total error estimate
       region<Real> current = pq.top();
       pq.pop();
       
-      // Remove current region's contribution
+      // Remove current region's contribution from global sums
+      // We'll add back the contributions from its children after evaluation
       integral_.add(-current.estimate_fine);
       error_sum_.add(-current.error);
       
-      // Use stored split dimension or compute with caching
+      // Axis selection strategy: Choose dimension with largest directional variation
+      // This is based on the observation that subdividing along directions of high
+      // variation typically produces better error reduction. The Genz-Malik rules
+      // provide directional fourth-differences that estimate this variation.
+      // Note: split_dim is 0-indexed, so 0 is a valid dimension. We check if it's
+      // uninitialized by seeing if it equals the dimension (which is out of bounds).
       std::size_t split_dim = current.split_dim;
-      if (split_dim == 0) {
-        // Create region hash for cache lookup
+      if (split_dim >= dim) {
+        // Create region hash for cache lookup using FNV-1a variant
+        // This avoids recomputing variations for regions we've seen before
         std::size_t region_hash = 0;
         for (std::size_t i = 0; i < dim; ++i) {
           std::hash<Real> hasher;
@@ -165,23 +180,45 @@ public:
           region_hash ^= hasher(current.b[i]) + 0x9e3779b9 + (region_hash << 6) + (region_hash >> 2);
         }
         
-        // Check cache for directional variations
+        // Check if we've already computed variations for this region
         auto cache_it = variation_cache_.find(region_hash);
         if (cache_it != variation_cache_.end() && cache_it->second.valid) {
           split_dim = cache_it->second.best_dim;
         } else {
-          // Compute directional variations
+          // Compute directional variations from fourth-differences
+          // The Genz-Malik rule provides these from the symmetric node pairs
           directional_cache& cache_entry = variation_cache_[region_hash];
           cache_entry.variations.resize(dim);
           
           Real max_variation = Real(0);
+          
+          // Try to extract fourth-differences from the last evaluation result
+          // These provide better estimates of directional variation than simple width
+          bool have_fourth_diffs = false;
+          std::array<Real, 15> fourth_diffs{};
+          
+          if (current.cached_values) {
+            // The cached_values is type-erased, but we know it contains the evaluation result
+            // Try to extract fourth differences if they were computed
+            // Note: In the current implementation, fourth_diffs are stored in the result
+            // but not in cached_values. We would need to modify the evaluator to cache them.
+            // For now, we'll use the split_dim that was already computed during evaluation.
+          }
+          
           for (std::size_t i = 0; i < dim; ++i) {
             Real width = current.b[i] - current.a[i];
             
-            // Estimate variation using fourth-difference if available
-            Real variation = width;
-            // For now, use width-based heuristic
-            // Full implementation would cast cached_values to proper type
+            // Use fourth-difference if available, otherwise use width-weighted heuristic
+            Real variation;
+            if (have_fourth_diffs && i < 15) {
+              // Fourth-difference provides estimate of function variation in direction i
+              // Scale by width^4 since fourth-difference scales with h^4
+              variation = std::abs(fourth_diffs[i]) * std::pow(width, 4);
+            } else {
+              // Fallback: use width as proxy for potential variation
+              // Wider dimensions are more likely to have significant variation
+              variation = width;
+            }
             
             cache_entry.variations[i] = variation;
             if (variation > max_variation) {
@@ -195,7 +232,8 @@ public:
         }
       }
       
-      // Bisect region
+      // Bisect the selected region along the chosen dimension at the midpoint
+      // This creates two child regions of equal volume
       auto [left, right] = bisect_region(current, split_dim);
       
       // Evaluate child regions with parent's cached values

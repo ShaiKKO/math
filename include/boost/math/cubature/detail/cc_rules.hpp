@@ -17,15 +17,40 @@
 
 namespace boost { namespace math { namespace cubature { namespace detail {
 
+/// \file cc_rules.hpp
+/// \brief Clenshaw-Curtis quadrature nodes and weights
+/// \details Provides nested Clenshaw-Curtis rules for Smolyak sparse grid construction.
+///          The nodes are Chebyshev points that provide excellent interpolation
+///          properties and can be computed via DCT for efficiency.
+///
+/// Key properties:
+///  - Nodes are zeros of Chebyshev polynomials: cos(πj/n) for j=0,...,n
+///  - Nested structure: nodes at level k are subset of level k+1
+///  - Slow exponential growth: 1, 3, 5, 9, 17, 33, ... minimizes point count
+///  - Weights computed via DCT-I for O(n log n) complexity
+///  - Polynomial exactness: degree 2n-1 for n points (odd n)
+///
+/// References:
+///  - Clenshaw & Curtis (1960): "A method for numerical integration on an
+///    automatic computer"
+///  - Waldvogel (2006): "Fast construction of the Fejér and Clenshaw-Curtis
+///    quadrature rules"
+///
+/// \author Colin MacRitchie
+/// \date 2025
+
 /// \brief Clenshaw-Curtis quadrature rules with nested slow exponential growth
 /// \details Implements nested CC rules with growth sequence 1, 3, 5, 9, 17, 33, ...
-///          Following ALGORITHMS.md §2.1 for sparse grid construction
+///          This growth pattern maintains nestedness while minimizing point count
 template <typename Real>
 class clenshaw_curtis {
 public:
   /// \brief Get number of points for given level (slow exponential growth)
-  /// \details Growth: m(0)=1, m(1)=3, m(2)=5, m(3)=9, m(4)=17, ...
-  ///          Formula: m(l) = 1 if l=0, else 2^l + 1 for l≥2, special case for l=1
+  /// \details Growth pattern ensures nestedness while keeping point count low:
+  ///          - Level 0: 1 point (midpoint rule)
+  ///          - Level 1: 3 points (Simpson's rule)
+  ///          - Level k≥2: 2^k + 1 points
+  ///          This gives: 1, 3, 5, 9, 17, 33, 65, 129, ...
   static std::size_t num_points(std::size_t level) {
     switch(level) {
       case 0: return 1;
@@ -35,7 +60,10 @@ public:
   }
   
   /// \brief Get Clenshaw-Curtis nodes for given level
-  /// \details Nodes are cos(πj/n) for j=0,...,n where n = num_points(level)-1
+  /// \details Computes Chebyshev points on [-1,1]:
+  ///          x_j = cos(πj/n) for j=0,...,n where n = num_points(level)-1
+  ///          These nodes minimize the Runge phenomenon and provide
+  ///          near-optimal polynomial interpolation
   static std::vector<Real> get_nodes(std::size_t level) {
     const std::size_t n_points = num_points(level);
     std::vector<Real> nodes(n_points);

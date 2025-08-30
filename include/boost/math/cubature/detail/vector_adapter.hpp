@@ -230,18 +230,20 @@ public:
 
 /// \brief Vector region for adaptive refinement
 template <typename Real>
-struct vector_region : public region<Real> {
+struct vector_region : public detail::region<Real> {
   std::vector<Real> component_estimates_fine;
   std::vector<Real> component_estimates_coarse;
   std::vector<Real> component_errors;
   Real aggregated_error;  // Error using chosen norm
+  std::size_t split_dimension;  // Best axis to split
   
   vector_region(std::size_t dim, std::size_t num_components) 
-    : region<Real>(dim),
+    : detail::region<Real>(dim),
       component_estimates_fine(num_components),
       component_estimates_coarse(num_components),
       component_errors(num_components),
-      aggregated_error(0) {}
+      aggregated_error(0),
+      split_dimension(0) {}
   
   /// \brief Compute aggregated error using specified norm
   void compute_aggregated_error(error_norm norm) {

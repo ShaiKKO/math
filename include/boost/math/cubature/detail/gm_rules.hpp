@@ -20,18 +20,59 @@
 namespace boost { namespace math { namespace cubature { namespace detail {
 
 /// \file gm_rules.hpp
-/// \brief Fully symmetric Genz–Malik embedded rules (API + metadata).
+/// \brief Fully symmetric Genz-Malik embedded cubature rules
 /// \details Provides compile-time metadata and accessors for degree-7/5 and 9/7
-///  embedded cubature rules on the unit hypercube [0,1]^d (affine scaled by caller).
+///          embedded cubature rules on the unit hypercube [0,1]^d.
+/// 
+/// \section gm_overview Overview
+/// Genz-Malik rules are embedded pairs of fully symmetric cubature formulas:
+/// - Degree 7/5 pair: Primary degree-7 rule with embedded degree-5 error estimate
+/// - Degree 9/7 pair: Higher-order degree-9 rule with embedded degree-7 estimate
+/// 
+/// \section gm_structure Rule Structure
+/// The rules exploit full symmetry group of the hypercube:
+/// - Center orbit: 1 point at (1/2, 1/2, ...)
+/// - Axis orbits: 2d points at (1/2±λᵢ, 1/2, ...)
+/// - Pair orbits: Points with 2 non-center coordinates
+/// - Diagonal orbit: 2^d corner points
+/// 
+/// \section gm_properties Properties
+/// - Exact for all monomials up to specified degree
+/// - Positive weights for numerical stability
+/// - Embedded error estimation without extra evaluations
+/// - Optimal node placement via moment matching
+/// 
+/// \section gm_usage Usage
+/// \code
+/// // Check availability for dimension
+/// if constexpr (gm::available_v<7, 3>) {
+///     using rule = gm::rule<7, 3>;
+///     auto nodes = rule::nodes<double>();
+///     auto weights = rule::weights<double>();
+/// }
+/// 
+/// // Use embedded pair for error estimation
+/// using pair = gm::pair_7_5<3>;
+/// auto fine_weights = pair::fine::weights<double>();
+/// auto coarse_weights = pair::coarse::weights<double>();
+/// \endcode
+/// 
+/// \references
+/// - A.C. Genz and A.A. Malik, "An adaptive algorithm for numerical integration
+///   over an N-dimensional rectangular region", J. Comp. Appl. Math. 6 (1980)
+/// - J. Berntsen, T.O. Espelid, and A. Genz, "An adaptive algorithm for the
+///   approximate calculation of multiple integrals", ACM TOMS 17 (1991)
 
 namespace gm {
 
-// Tags for rule degrees
-struct deg5  { static constexpr int value = 5; };
-struct deg7  { static constexpr int value = 7; };
-struct deg9  { static constexpr int value = 9; };
+/// \brief Tags for rule degrees
+struct deg5  { static constexpr int value = 5; };  ///< Degree-5 rule
+struct deg7  { static constexpr int value = 7; };  ///< Degree-7 rule
+struct deg9  { static constexpr int value = 9; };  ///< Degree-9 rule
 
-// Rule descriptor: primary template (not available by default)
+/// \brief Rule descriptor: primary template (not available by default)
+/// \tparam Degree Polynomial degree of exactness (5, 7, or 9)
+/// \tparam Dim Spatial dimension
 template <int Degree, int Dim>
 struct rule {
   static constexpr bool available = false;
@@ -46,7 +87,10 @@ struct rule {
   static constexpr std::array<Real, size> weights() { return {}; }
 };
 
-// Embedded pair helper: exposes fine/coarse rules sharing nodes
+/// \brief Embedded pair helper: exposes fine/coarse rules sharing nodes
+/// \tparam FineDeg Higher degree rule
+/// \tparam CoarseDeg Lower degree rule for error estimation
+/// \tparam Dim Spatial dimension
 template <int FineDeg, int CoarseDeg, int Dim>
 struct embedded_pair {
   using fine   = rule<FineDeg, Dim>;
@@ -54,7 +98,7 @@ struct embedded_pair {
   static constexpr bool available = fine::available && coarse::available;
 };
 
-// Convenience alias for common pairs
+/// \brief Convenience alias for degree 7/5 embedded pair
 template <int Dim>
 using pair_7_5 = embedded_pair<7,5,Dim>;
 
@@ -68,11 +112,14 @@ constexpr bool available_v = available_v_helper<Degree, Dim>::value;
 template <int Fine, int Coarse, int Dim>
 struct pair_available_v_helper { static constexpr bool value = embedded_pair<Fine, Coarse, Dim>::available; };
 
-// Families for fully symmetric embedded rules
-struct family_7_5 { };
-struct family_9_7 { };
+/// \brief Rule families for different embedded pairs
+struct family_7_5 { };  ///< Genz-Malik 7/5 family (original)
+struct family_9_7 { };  ///< Extended 9/7 family (DCUHRE)
 
-// Family-aware rule template (default: unavailable)
+/// \brief Family-aware rule template
+/// \tparam Degree Polynomial degree of exactness
+/// \tparam Dim Spatial dimension
+/// \tparam Family Rule family tag (family_7_5 or family_9_7)
 template <int Degree, int Dim, class Family>
 struct rule_fam {
   static constexpr bool available = false;
@@ -93,11 +140,11 @@ struct embedded_pair_fam {
   static constexpr bool available = fine::available && coarse::available;
 };
 
+/// \brief Convenience alias for degree 9/7 embedded pair
 template <int Dim>
 using pair_9_7 = embedded_pair_fam<family_9_7, Dim>;
 
-// Backward-compatibility: existing rule<Degree,Dim> refers to 7/5 family
-// (Existing specializations below remain valid for 7/5.)
+/// \note Backward-compatibility: existing rule<Degree,Dim> refers to 7/5 family
 
 
 template <int Fine, int Coarse, int Dim>
@@ -1323,7 +1370,7 @@ struct raw_rule_fam {
   static constexpr auto weights_with_zero() { return std::array<Real, 0>{}; }
 };
 
-// 2D raw (includes axis_lp_null)
+// 2D degree-9 raw (includes axis_lp_null)
 template <> struct raw_rule_fam<9, 2, family_9_7> {
   static constexpr bool available = true;
   static constexpr std::size_t size = 33; // 29 + 4 zero-weight
@@ -1369,6 +1416,72 @@ template <> struct raw_rule_fam<9, 2, family_9_7> {
   }
 };
 
+// 2D degree-7 raw (includes all 33 nodes with zeros for degree-9-only points)
+template <> struct raw_rule_fam<7, 2, family_9_7> {
+  static constexpr bool available = true;
+  static constexpr std::size_t size = 33; // Same 33 nodes as degree-9
+  
+  template <class Real>
+  static constexpr std::array<std::array<Real,2>, size> nodes_with_zero() {
+    // Use exact same nodes as degree-9
+    return raw_rule_fam<9, 2, family_9_7>::template nodes_with_zero<Real>();
+  }
+  
+  template <class Real>
+  static constexpr std::array<Real, size> weights_with_zero() {
+    // Based on GM_9-7_d2_combined.csv data
+    const long double s = 1.0L/4.0L; // Domain scaling
+    std::array<Real, size> ws{};
+    
+    // Weights from CSV file (weight_7 column)
+    // Order matches the node order in raw_rule_fam<9, 2, family_9_7>
+    ws[0] = static_cast<Real>(2.914823000350649451L * s);  // center
+    
+    // axis_l1 (4 nodes)
+    ws[1] = static_cast<Real>(0.049205508173196022L * s);
+    ws[2] = static_cast<Real>(0.049205508173196022L * s);
+    ws[3] = static_cast<Real>(0.049205508173196022L * s);
+    ws[4] = static_cast<Real>(0.049205508173196022L * s);
+    
+    // axis_l2 (4 nodes)
+    ws[5] = static_cast<Real>(0.123593980320432464L * s);
+    ws[6] = static_cast<Real>(0.123593980320432464L * s);
+    ws[7] = static_cast<Real>(0.123593980320432464L * s);
+    ws[8] = static_cast<Real>(0.123593980320432464L * s);
+    
+    // axis_l3 (4 nodes) - zero for degree-7
+    ws[9] = static_cast<Real>(0);
+    ws[10] = static_cast<Real>(0);
+    ws[11] = static_cast<Real>(0);
+    ws[12] = static_cast<Real>(0);
+    
+    // pair_l1_l1 (4 nodes)
+    ws[13] = static_cast<Real>(0.009708933337374199L * s);
+    ws[14] = static_cast<Real>(0.009708933337374199L * s);
+    ws[15] = static_cast<Real>(0.009708933337374199L * s);
+    ws[16] = static_cast<Real>(0.009708933337374199L * s);
+    
+    // pair_l1_l2 (8 nodes) - zero for degree-7
+    for (int i = 17; i < 25; ++i) {
+      ws[i] = static_cast<Real>(0);
+    }
+    
+    // full_diag_l0 (4 nodes)
+    ws[25] = static_cast<Real>(0.088785828081335019L * s);
+    ws[26] = static_cast<Real>(0.088785828081335019L * s);
+    ws[27] = static_cast<Real>(0.088785828081335019L * s);
+    ws[28] = static_cast<Real>(0.088785828081335019L * s);
+    
+    // axis_lp_null (4 nodes) - always zero
+    ws[29] = static_cast<Real>(0);
+    ws[30] = static_cast<Real>(0);
+    ws[31] = static_cast<Real>(0);
+    ws[32] = static_cast<Real>(0);
+    
+    return ws;
+  }
+};
+
 template <> struct raw_rule_fam<9, 3, family_9_7> {
   static constexpr bool available = true;
   static constexpr std::size_t size = 77;
@@ -1391,6 +1504,48 @@ template <> struct raw_rule_fam<9, 3, family_9_7> {
     return ws;
   }
 };
+
+// 3D degree-7 raw (includes all 77 nodes with zeros for degree-9-only points)
+template <> struct raw_rule_fam<7, 3, family_9_7> {
+  static constexpr bool available = true;
+  static constexpr std::size_t size = 77; // Same 77 nodes as degree-9
+  
+  template <class Real>
+  static constexpr std::array<std::array<Real,3>, size> nodes_with_zero() {
+    // Use exact same nodes as degree-9
+    return raw_rule_fam<9, 3, family_9_7>::template nodes_with_zero<Real>();
+  }
+  
+  template <class Real>
+  static constexpr std::array<Real, size> weights_with_zero() {
+    // Get base weights from regular degree-7 rule
+    const auto base = rule_fam<7,3, family_9_7>::template weights<Real>();
+    std::array<Real, size> ws{};
+    
+    // Copy the 33 base weights
+    std::size_t k=0; 
+    for (auto w : base) ws[k++]=w;
+    
+    // The remaining 44 weights are zero for degree-7
+    // This includes triple_l1_l1_l1 (32 nodes) and axis_lp_null (6 nodes) and some pair weights
+    for (int i=k; i<77; ++i) ws[i]=static_cast<Real>(0);
+    
+    return ws;
+  }
+};
+
+// Include 4D raw rules
+#include "gm_rules_4d.hpp"
+
+// Include 5D raw rules
+#include "gm_rules_5d.hpp"
+
+// Include 6D-10D raw rules (9/7 family)
+#include "gm_rules_6d.hpp"
+#include "gm_rules_7d.hpp"
+#include "gm_rules_8d.hpp"
+#include "gm_rules_9d.hpp"
+#include "gm_rules_10d.hpp"
 
 } // namespace gm
 

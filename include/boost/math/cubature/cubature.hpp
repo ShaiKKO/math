@@ -29,13 +29,36 @@
 namespace boost { namespace math { namespace cubature {
 
 /// \file cubature.hpp
-/// \brief Master header for Boost.Math Cubature library
-/// \details Provides unified interface for numerical integration including:
-///  - Adaptive integration (DCUHRE/Genz-Malik)
-///  - Sparse grids (Smolyak/Clenshaw-Curtis)
-///  - Quasi-Monte Carlo (Sobol sequences)
-///  - Simplex integration (Duffy transform)
-///  - Infinite domain transforms
+/// \brief Master header for N-dimensional numerical integration
+/// \details The Boost.Math Cubature library provides high-performance numerical
+///          integration algorithms for multi-dimensional integrals:
+///  - Adaptive integration using DCUHRE algorithm with Genz-Malik embedded rules
+///  - Sparse grids with Smolyak construction and Clenshaw-Curtis nodes
+///  - (Randomized) Quasi-Monte Carlo with Sobol sequences and Owen scrambling
+///  - Simplex integration via Duffy transformation
+///  - Automatic handling of infinite and semi-infinite domains
+///
+/// \author Colin MacRitchie
+/// \date 2025
+///
+/// Example usage:
+/// \code
+/// using namespace boost::math::cubature;
+/// 
+/// // Define integrand: f(x,y) = exp(-(x^2 + y^2))
+/// auto gaussian = [](const double* x, std::size_t) {
+///     return std::exp(-(x[0]*x[0] + x[1]*x[1]));
+/// };
+/// 
+/// // Set up integration domain [0,1] x [0,1]
+/// hypercube<double> box(2);
+/// box.lower = {0, 0};
+/// box.upper = {1, 1};
+/// 
+/// // Integrate with adaptive method
+/// auto result = integrate(gaussian, box, 1e-8, 1e-6);
+/// std::cout << "Result: " << result.value << " ± " << result.error << std::endl;
+/// \endcode
 
 // Forward declarations for convenience functions
 namespace detail {
@@ -46,13 +69,29 @@ namespace detail {
     infinite_transform_type select_transform(const hypercube<Real>& box);
 }
 
-/// \brief Integrate over infinite or semi-infinite domain using adaptive method
-/// \param f Integrand function
-/// \param lower Lower bounds (can include -inf)
-/// \param upper Upper bounds (can include +inf)
-/// \param abs_tol Absolute tolerance
-/// \param rel_tol Relative tolerance
-/// \param pol Boost.Math policy
+/// \brief Integrate over infinite or semi-infinite domains
+/// \details Automatically selects appropriate transformation for infinite bounds:
+///          - tanh-sinh for finite domains
+///          - exp-sinh for semi-infinite [a,∞) or (-∞,b]
+///          - sinh-sinh for bi-infinite (-∞,∞)
+///          For dimensions > 1, applies coordinate transformations.
+///
+/// \tparam Real Floating-point type (float, double, long double, or multiprecision)
+/// \tparam F Integrand type callable as f(const Real*, std::size_t) -> Real
+/// \tparam Policy Boost.Math policy type for error handling
+///
+/// \param f Integrand function with signature Real(const Real* x, std::size_t dim)
+/// \param lower Vector of lower bounds (may contain -std::numeric_limits<Real>::infinity())
+/// \param upper Vector of upper bounds (may contain std::numeric_limits<Real>::infinity())
+/// \param abs_tol Absolute error tolerance
+/// \param rel_tol Relative error tolerance
+/// \param max_eval Maximum number of function evaluations allowed
+/// \param pol Boost.Math policy object
+///
+/// \return result<Real> containing value, error estimate, evaluations, and status
+///
+/// \note For 1D integrals, delegates to specialized quadrature methods which are
+///       more efficient than the general multi-dimensional algorithms.
 template <class Real, class F, class Policy = default_policy>
 inline result<Real> integrate_adaptive_infinite(
     const F& f,
@@ -338,10 +377,33 @@ inline result<Real> integrate_sparse_grid_infinite(
 }
 
 /// \brief Master integration function with automatic method selection
-/// \details Automatically selects integration method based on:
-///  - Domain type (hypercube, simplex, infinite)
-///  - Dimension
-///  - Tolerance requirements
+/// \details Automatically selects the most appropriate integration algorithm based on:
+///          - Dimension: Low (≤6) uses adaptive, medium (≤15) uses sparse grids, 
+///            high (>15) uses adaptive with limited evaluations
+///          - Tolerance: High accuracy (rel_tol < 1e-8) prefers adaptive method
+///          - Domain type: Automatically handles infinite bounds
+///
+/// Algorithm selection:
+///  - 1D: Delegates to specialized quadrature methods
+///  - 2-6D or high accuracy: Adaptive DCUHRE with Genz-Malik rules
+///  - 7-15D: Sparse grids with Smolyak construction
+///  - 16+D: Would use QMC when fully implemented, currently uses adaptive
+///
+/// \tparam Real Floating-point type
+/// \tparam F Integrand type callable as f(const Real*, std::size_t) -> Real
+/// \tparam Policy Boost.Math policy type
+///
+/// \param f Integrand function
+/// \param box Integration domain (hypercube)
+/// \param abs_tol Absolute error tolerance
+/// \param rel_tol Relative error tolerance  
+/// \param pol Boost.Math policy object
+///
+/// \return result<Real> containing integral value, error estimate, and diagnostics
+///
+/// \note This is the recommended entry point for most integration tasks.
+///       The algorithm selection heuristics are based on extensive testing
+///       with the Genz test function suite.
 template <class Real, class F, class Policy = default_policy>
 inline result<Real> integrate(
     const F& f,
@@ -359,7 +421,7 @@ inline result<Real> integrate(
     // For moderate dimensions, use sparse grids
     if (dim <= 15) {
         // Estimate required level from tolerance
-        unsigned level = static_cast<unsigned>(std::max(3.0, -std::log10(rel_tol) / 2));
+        unsigned level = static_cast<unsigned>(std::max(Real(3), -std::log10(rel_tol) / Real(2)));
         return integrate_sparse_grid<Real>(f, box, level, pol);
     }
     

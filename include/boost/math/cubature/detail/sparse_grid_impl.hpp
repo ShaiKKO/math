@@ -16,11 +16,13 @@
 #include <numeric>
 #include <functional>
 #include <type_traits>
+#include <limits>
 
 // Project headers after STL
 #include <boost/math/cubature/detail/cc_rules.hpp>
 #include <boost/math/cubature/detail/adaptivity.hpp>
 #include <boost/math/cubature/policies.hpp>
+#include <boost/math/cubature/regions.hpp>
 
 namespace boost { namespace math { namespace cubature { namespace detail {
 
@@ -69,14 +71,18 @@ public:
   const std::vector<multi_index<IndexType>>& indices() const { return indices_; }
   
   /// \brief Compute Smolyak coefficient for given multi-index
-  /// \details Returns (-1)^(ℓ-|i|) * C(d-1, ℓ-|i|)
+  /// \details The Smolyak formula combines tensor products with alternating signs:
+  ///          A(ℓ,d) = Σ (-1)^(ℓ-|i|) * C(d-1, ℓ-|i|) * (U^{i_1} ⊗ ... ⊗ U^{i_d})
+  ///          where the sum is over multi-indices with ℓ-d+1 ≤ |i| ≤ ℓ
+  ///          This function returns the coefficient (-1)^(ℓ-|i|) * C(d-1, ℓ-|i|)
   int coefficient(const multi_index<IndexType>& idx) const {
     IndexType diff = level_ - idx.sum;
     
-    // Compute binomial coefficient C(d-1, diff)
+    // Binomial coefficient C(d-1, diff) counts tensor products at this level
     std::size_t binom = binomial_coefficient(dimension_ - 1, diff);
     
-    // Apply sign
+    // Alternating sign implements inclusion-exclusion principle
+    // to avoid overcounting shared nodes between tensor products
     int sign = (diff % 2 == 0) ? 1 : -1;
     
     return sign * static_cast<int>(binom);
@@ -84,13 +90,17 @@ public:
   
 private:
   void generate_indices() {
-    // Generate all multi-indices with sum between ℓ-d+1 and ℓ
+    // Generate all multi-indices satisfying the Smolyak constraint:
+    // ℓ-d+1 ≤ |i| ≤ ℓ, where |i| = i_1 + i_2 + ... + i_d
+    // These indices determine which tensor products to include
+    // Lower bound ensures we don't include low-order terms already in A(ℓ-1,d)
     IndexType min_sum = (level_ >= dimension_ - 1) ? level_ - dimension_ + 1 : 0;
     IndexType max_sum = level_;
     
     generate_recursive(multi_index<IndexType>(dimension_), 0, min_sum, max_sum);
     
-    // Sort for deterministic ordering
+    // Sort for deterministic ordering (lexicographic)
+    // This ensures reproducible results across platforms
     std::sort(indices_.begin(), indices_.end());
   }
   
@@ -183,14 +193,16 @@ public:
     finalized_ = false;
     auto it = node_map_.find(point);
     if (it != node_map_.end()) {
-      // Proper Kahan compensated summation
-      // it->second.first = accumulated sum
-      // it->second.second = compensation term
-      Real y = weight - it->second.second;      // Apply compensation
+      // Node already exists - accumulate weight using Kahan summation
+      // This maintains numerical accuracy when combining many tensor products
+      // with alternating signs (inclusion-exclusion can cause cancellation)
+      // Kahan algorithm tracks a compensation term for lost low-order digits
+      Real y = weight - it->second.second;      // Apply previous compensation
       Real t = it->second.first + y;            // Tentative sum
-      it->second.second = (t - it->second.first) - y;  // New compensation  
-      it->second.first = t;                     // New sum
+      it->second.second = (t - it->second.first) - y;  // Update compensation
+      it->second.first = t;                     // Store corrected sum
     } else {
+      // New node - initialize with weight and zero compensation
       node_map_[point] = std::make_pair(weight, Real(0));
     }
   }
@@ -235,10 +247,21 @@ private:
   std::size_t level_;
   sparse_node_set<Real> nodes_;
   std::vector<sparse_node<Real>> previous_level_nodes_;
+  bool enable_diagnostics_;
+  
+  // Diagnostic information
+  struct diagnostic_info {
+    std::size_t num_positive_weights = 0;
+    std::size_t num_negative_weights = 0;
+    Real sum_positive_weights = 0;
+    Real sum_negative_weights = 0;
+    Real weight_cancellation_ratio = 0;  // |sum|weights|| / |sum weights|
+    bool has_weight_issues = false;
+  } diagnostics_;
   
 public:
-  smolyak_grid(std::size_t dimension, std::size_t level)
-    : dimension_(dimension), level_(level) {
+  smolyak_grid(std::size_t dimension, std::size_t level, bool enable_diagnostics = false)
+    : dimension_(dimension), level_(level), enable_diagnostics_(enable_diagnostics) {
     construct_grid();
   }
   
@@ -260,8 +283,15 @@ public:
   result<Real> evaluate(const F& f, const hypercube<Real>& box) {
     const auto& nodes = nodes_.get_nodes();
     
+    // Collect diagnostic information if enabled
+    if (enable_diagnostics_) {
+      collect_weight_diagnostics(nodes);
+    }
+    
     kahan_accumulator<Real> sum;
     std::size_t evaluations = 0;
+    bool all_positive = true;  // Track if integrand is always positive
+    Real min_value = std::numeric_limits<Real>::max();
     
     // Transform nodes from [0,1]^d to box and evaluate
     std::vector<Real> point(dimension_);
@@ -285,6 +315,10 @@ public:
       } else {
         static_assert(sizeof(F) == 0, "Integrand must be callable with vector<Real>, (const Real*, size_t), or const Real*");
       }
+      
+      if (value < 0) all_positive = false;
+      min_value = std::min(min_value, value);
+      
       sum.add(value * node.weight);
       evaluations++;
     }
@@ -300,10 +334,74 @@ public:
     res.evaluations = evaluations;
     res.status = status_code::success;
     
-    // Estimate error using hierarchical surplus method
-    res.error = estimate_surplus_error(res.value);
+    // Sanity check: warn if integral is negative for non-negative integrand
+    if (all_positive && res.value < 0) {
+      res.status = status_code::cancelled;  // Use this to indicate numerical issues
+      // In production, might want to log warning or throw exception
+      // Note: we're repurposing cancelled to indicate the integration is unreliable
+    }
+    
+    // Check for weight cancellation issues
+    if (enable_diagnostics_ && diagnostics_.has_weight_issues) {
+      // Adjust error estimate to reflect uncertainty
+      res.error = std::max(estimate_surplus_error(res.value),
+                           std::abs(res.value) * diagnostics_.weight_cancellation_ratio);
+    } else {
+      res.error = estimate_surplus_error(res.value);
+    }
     
     return res;
+  }
+  
+  /// \brief Evaluate vector integral using sparse grid
+  template <typename F>
+  std::vector<result<Real>> evaluate_vector(const F& f, const hypercube<Real>& box, 
+                                           std::size_t num_components) {
+    const auto& nodes = nodes_.get_nodes();
+    
+    // Kahan accumulators for each component
+    std::vector<kahan_accumulator<Real>> sums(num_components);
+    std::size_t evaluations = 0;
+    
+    // Temporary buffer for function values
+    std::vector<Real> values(num_components);
+    
+    // Transform nodes from [0,1]^d to box and evaluate
+    std::vector<Real> point(dimension_);
+    for (const auto& node : nodes) {
+      // Transform from [0,1]^d to [a,b]^d
+      for (std::size_t i = 0; i < dimension_; ++i) {
+        point[i] = box.lower[i] + node.point[i] * (box.upper[i] - box.lower[i]);
+      }
+      
+      // Evaluate vector integrand (single call for all components)
+      f(point.data(), values.data(), num_components);
+      
+      // Accumulate weighted sums for each component
+      for (std::size_t c = 0; c < num_components; ++c) {
+        sums[c].add(values[c] * node.weight);
+      }
+      evaluations++;
+    }
+    
+    // Scale by box volume
+    Real volume = 1.0;
+    for (std::size_t i = 0; i < dimension_; ++i) {
+      volume *= (box.upper[i] - box.lower[i]);
+    }
+    
+    // Create results for each component
+    std::vector<result<Real>> results(num_components);
+    for (std::size_t c = 0; c < num_components; ++c) {
+      results[c].value = sums[c].sum() * volume;
+      results[c].evaluations = evaluations;
+      results[c].status = status_code::success;
+      
+      // Estimate error using hierarchical surplus method
+      results[c].error = estimate_surplus_error(results[c].value);
+    }
+    
+    return results;
   }
   
   /// \brief Get number of unique nodes
@@ -314,6 +412,45 @@ public:
   /// \brief Get the sparse grid nodes (for testing)
   std::vector<sparse_node<Real>> get_nodes() const {
     return nodes_.get_nodes();
+  }
+  
+  /// \brief Get diagnostic information (if enabled)
+  const diagnostic_info& get_diagnostics() const {
+    return diagnostics_;
+  }
+  
+private:
+  /// \brief Collect diagnostic information about weights
+  void collect_weight_diagnostics(const std::vector<sparse_node<Real>>& nodes) {
+    diagnostics_ = diagnostic_info{};  // Reset
+    
+    Real sum_abs_weights = 0;
+    Real sum_weights = 0;
+    
+    for (const auto& node : nodes) {
+      Real w = node.weight;
+      sum_weights += w;
+      sum_abs_weights += std::abs(w);
+      
+      if (w > 0) {
+        diagnostics_.num_positive_weights++;
+        diagnostics_.sum_positive_weights += w;
+      } else if (w < 0) {
+        diagnostics_.num_negative_weights++;
+        diagnostics_.sum_negative_weights += std::abs(w);
+      }
+    }
+    
+    // Calculate weight cancellation ratio
+    if (std::abs(sum_weights) > Real(1e-10)) {
+      diagnostics_.weight_cancellation_ratio = sum_abs_weights / std::abs(sum_weights);
+    } else {
+      diagnostics_.weight_cancellation_ratio = std::numeric_limits<Real>::max();
+    }
+    
+    // Flag potential issues
+    // If cancellation ratio > 10, we have significant cancellation
+    diagnostics_.has_weight_issues = (diagnostics_.weight_cancellation_ratio > Real(10));
   }
   
 private:
@@ -370,17 +507,20 @@ private:
     Real h = std::pow(Real(2), -Real(level_));
     
     // For Clenshaw-Curtis with smooth functions, expect spectral convergence
-    // But use conservative polynomial rate for safety
-    Real convergence_rate = Real(2 * level_);  // Polynomial exactness degree
+    // Use more realistic convergence rate
+    Real convergence_rate = std::min(Real(2 * level_), Real(4));  // Cap at 4th order
     
-    // Apply dimension-dependent factor
-    Real dim_factor = std::pow(Real(dimension_), Real(0.5));
+    // Apply dimension-dependent factor (curse of dimensionality)
+    Real dim_factor = std::sqrt(Real(dimension_));
     
-    // Heuristic error estimate
-    Real error_estimate = std::abs(current_value) * dim_factor * std::pow(h, convergence_rate);
+    // More realistic error estimate
+    Real error_estimate = std::abs(current_value) * std::pow(h, convergence_rate);
+    
+    // Apply dimension scaling
+    error_estimate *= dim_factor;
     
     // Add safety factor and machine epsilon margin
-    Real safety_factor = Real(10);
+    Real safety_factor = Real(2);  // Reduced from 10
     Real epsilon_margin = std::numeric_limits<Real>::epsilon() * 
                           std::abs(current_value) * Real(100);
     
@@ -393,7 +533,8 @@ template <typename Real, typename F>
 result<Real> integrate_sparse_grid_impl(
     const F& f,
     const hypercube<Real>& box,
-    std::size_t level)
+    std::size_t level,
+    bool enable_diagnostics = false)
 {
   std::size_t dim = box.dimension();
   
@@ -406,8 +547,41 @@ result<Real> integrate_sparse_grid_impl(
   }
   
   // Construct and evaluate sparse grid
+  smolyak_grid<Real> grid(dim, level, enable_diagnostics);
+  auto res = grid.evaluate(f, box);
+  
+  // Add warning if we detected issues
+  if (enable_diagnostics && grid.get_diagnostics().has_weight_issues) {
+    // Could log warning here in production code
+    // The status_code::cancelled in the result indicates potential issues
+  }
+  
+  return res;
+}
+
+/// \brief Main vector integration function for sparse grid
+template <typename Real, typename F>
+std::vector<result<Real>> integrate_sparse_grid_vector_impl(
+    const F& f,
+    const hypercube<Real>& box,
+    std::size_t num_components,
+    std::size_t level)
+{
+  std::size_t dim = box.dimension();
+  
+  // Validate inputs
+  if (dim == 0 || dim > 20 || num_components == 0) {
+    std::vector<result<Real>> res(num_components);
+    for (auto& r : res) {
+      r.status = status_code::dimension_error;
+      r.error = std::numeric_limits<Real>::max();
+    }
+    return res;
+  }
+  
+  // Construct and evaluate sparse grid
   smolyak_grid<Real> grid(dim, level);
-  return grid.evaluate(f, box);
+  return grid.evaluate_vector(f, box, num_components);
 }
 
 }}}} // namespace boost::math::cubature::detail

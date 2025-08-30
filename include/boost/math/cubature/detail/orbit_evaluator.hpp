@@ -17,14 +17,41 @@
 
 namespace boost { namespace math { namespace cubature { namespace detail {
 
+/// \file orbit_evaluator.hpp
 /// \brief Orbit-based function evaluations for Genz-Malik rules
-/// \details Evaluates integrands at symmetric orbit groups and computes
-///          directional fourth differences for optimal axis selection
+/// \details Implements efficient evaluation of integrands at symmetric orbit
+///          groups and computes directional fourth differences for optimal
+///          axis selection in adaptive subdivision.
+/// 
+/// \section orbit_theory Theory
+/// Genz-Malik rules exploit the symmetry of the integration region:
+/// - Center orbit: 1 point at origin
+/// - Axis orbits: 2d points at ±λᵢeⱼ
+/// - Pair orbits: 4C(d,2) points at (±λᵢ,±λⱼ,0,...)
+/// - Diagonal orbit: 2^d corner points
+/// 
+/// \section orbit_differences Fourth Differences
+/// The fourth divided difference along axis i is:
+/// \f$ \Delta^4_i = |f_{3i} - 2f_1 - 7(f_{2i} - 2f_1)| \f$
+/// where 7 = (λ₃/λ₂)² is the scaling factor from van Dooren & de Ridder.
+/// 
+/// \references
+/// - A.C. Genz and A.A. Malik, "An adaptive algorithm for numerical integration
+///   over an N-dimensional rectangular region", J. Comp. Appl. Math. 6 (1980)
+/// - P. van Dooren and L. de Ridder, "An adaptive algorithm for numerical
+///   integration over an n-dimensional cube", J. Comp. Appl. Math. 2 (1976)
+
+/// \brief Orbit-based function evaluations for Genz-Malik rules
+/// \tparam Real Floating point type
 template <typename Real>
 class orbit_evaluator {
 public:
   
   /// \brief Cached evaluations organized by orbit structure
+  /// \tparam Dim Dimension (compile-time for efficiency)
+  /// \details Stores function values at orbit representatives to enable
+  ///          efficient computation of both integration estimates and
+  ///          directional derivatives for axis selection.
   template <std::size_t Dim>
   struct orbit_values {
     Real f_center;                                    // Center point
@@ -51,6 +78,16 @@ public:
   };
   
   /// \brief Evaluate function at orbit representatives
+  /// \tparam F Integrand type
+  /// \tparam Dim Dimension
+  /// \tparam Degree Rule degree (5, 7, or 9)
+  /// \param f Integrand function
+  /// \param reg Integration region
+  /// \param values Output: function values at orbit points
+  /// 
+  /// \details Evaluates the integrand at all orbit representatives needed
+  ///          for the specified rule degree. Uses symmetry to minimize
+  ///          the number of function evaluations.
   template <typename F, std::size_t Dim, int Degree>
   static void evaluate_orbits(
       const F& f,
@@ -161,8 +198,18 @@ public:
   }
   
   /// \brief Compute directional fourth differences for axis selection
-  /// \details Implements the formula: f₃ᵢ - 2f₁ - 7*(f₂ᵢ - 2f₁)
-  ///          where 7 = (λ₃/λ₂)² as per van Dooren and de Ridder
+  /// \param values Function values at orbit points
+  /// \return Array of fourth differences for each dimension
+  /// 
+  /// \details Implements the formula: \f$ \Delta^4_i = |f_{3i} - 2f_1 - 7(f_{2i} - 2f_1)| \f$
+  /// where:
+  /// - \f$ f_1 \f$ = center value
+  /// - \f$ f_{2i} \f$ = sum at ±λ₂eᵢ
+  /// - \f$ f_{3i} \f$ = sum at ±λ₃eᵢ (or ±λ₁eᵢ for degree-7)
+  /// - 7 = (λ₃/λ₂)² = (9/10)/(9/70) = 7
+  /// 
+  /// The fourth difference estimates the magnitude of the fourth derivative
+  /// along each axis, indicating where the integrand varies most rapidly.
   template <std::size_t Dim>
   static std::array<Real, Dim> compute_fourth_differences(
       const orbit_values<Dim>& values)
@@ -199,6 +246,14 @@ public:
   }
   
   /// \brief Select optimal splitting dimension based on fourth differences
+  /// \param fourth_diffs Fourth differences for each dimension
+  /// \param reg Current region
+  /// \return Best dimension to split along
+  /// 
+  /// \details Selects the dimension with largest weighted fourth difference,
+  ///          where weighting by axis width prefers splitting longer axes.
+  ///          This heuristic tends to equalize error contributions across
+  ///          dimensions and maintains aspect ratio.
   template <std::size_t Dim>
   static std::size_t select_split_dimension(
       const std::array<Real, Dim>& fourth_diffs,

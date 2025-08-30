@@ -13,6 +13,7 @@
 #include <vector>
 #include <unordered_map>
 #include <cstdint>
+#include <memory>
 
 namespace boost { namespace math { namespace cubature {
 
@@ -23,14 +24,20 @@ struct execution_options {
 };
 
 /// \brief Thread-local workspace for integration algorithms
-/// \details Pre-allocated buffers to avoid dynamic allocation in hot paths
-template <typename Real>
+/// \details Pre-allocated buffers to avoid dynamic allocation in hot paths.
+///          Now includes policy context for error handling and precision control.
+/// \tparam Real Floating point type
+/// \tparam Policy Boost.Math policy type
+template <typename Real, typename Policy = default_policy>
 class workspace {
 private:
   // Buffer sizes (can be configured via constructor)
   static constexpr std::size_t default_node_capacity = 1024;
   static constexpr std::size_t default_value_capacity = 1024;
   static constexpr std::size_t default_region_capacity = 256;
+  
+  // Policy context
+  Policy policy_;
   
 public:
   // Node and weight buffers for quadrature rules
@@ -82,12 +89,13 @@ public:
   } sparse;
   
   /// \brief Default constructor with default buffer sizes
-  workspace() {
+  explicit workspace(const Policy& pol = Policy{}) : policy_(pol) {
     reserve_buffers(default_node_capacity, default_value_capacity);
   }
   
   /// \brief Constructor with custom buffer sizes
-  workspace(std::size_t node_capacity, std::size_t value_capacity) {
+  workspace(std::size_t node_capacity, std::size_t value_capacity, 
+           const Policy& pol = Policy{}) : policy_(pol) {
     reserve_buffers(node_capacity, value_capacity);
   }
   
@@ -127,10 +135,79 @@ public:
     qmc.random_state = 12345;
     qmc.sobol_points.clear();
   }
+  
+  /// \brief Get policy for error handling
+  const Policy& policy() const { return policy_; }
+  
+  /// \brief Set policy
+  void set_policy(const Policy& pol) { policy_ = pol; }
+  
+  /// \brief Create policy-aware accumulator
+  policy_accumulator<Real, Policy> make_accumulator() const {
+    return policy_accumulator<Real, Policy>(policy_);
+  }
 };
 
 // Type-erased workspace for policy-based dispatch
-using default_workspace = workspace<double>;
+using default_workspace = workspace<double, default_policy>;
+
+/// \brief Workspace pool for efficient reuse across multiple integrations
+/// \tparam Real Floating point type
+/// \tparam Policy Boost.Math policy type
+template <typename Real, typename Policy = default_policy>
+class workspace_pool {
+private:
+  std::vector<std::unique_ptr<workspace<Real, Policy>>> pool_;
+  std::vector<bool> available_;
+  Policy policy_;
+  std::size_t max_size_;
+  
+public:
+  explicit workspace_pool(std::size_t max_size = 16, const Policy& pol = Policy{})
+    : policy_(pol), max_size_(max_size) {
+    pool_.reserve(max_size);
+    available_.reserve(max_size);
+  }
+  
+  /// \brief Acquire a workspace from the pool
+  std::unique_ptr<workspace<Real, Policy>> acquire() {
+    // Look for available workspace
+    for (std::size_t i = 0; i < pool_.size(); ++i) {
+      if (available_[i]) {
+        available_[i] = false;
+        pool_[i]->clear();
+        return std::move(pool_[i]);
+      }
+    }
+    
+    // Create new workspace if pool not full
+    if (pool_.size() < max_size_) {
+      return std::make_unique<workspace<Real, Policy>>(policy_);
+    }
+    
+    // Pool exhausted, create temporary workspace
+    return std::make_unique<workspace<Real, Policy>>(policy_);
+  }
+  
+  /// \brief Return workspace to pool
+  void release(std::unique_ptr<workspace<Real, Policy>> ws) {
+    // Find empty slot
+    for (std::size_t i = 0; i < pool_.size(); ++i) {
+      if (!pool_[i]) {
+        pool_[i] = std::move(ws);
+        available_[i] = true;
+        return;
+      }
+    }
+    
+    // Add to pool if space available
+    if (pool_.size() < max_size_) {
+      pool_.push_back(std::move(ws));
+      available_.push_back(true);
+    }
+    // Otherwise workspace is destroyed
+  }
+};
 
 }}} // namespace boost::math::cubature
 
