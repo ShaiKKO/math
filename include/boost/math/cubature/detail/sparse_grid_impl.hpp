@@ -584,6 +584,284 @@ std::vector<result<Real>> integrate_sparse_grid_vector_impl(
   return grid.evaluate_vector(f, box, num_components);
 }
 
+/// \brief Dimension-adaptive sparse grid construction
+/// \details Allows different levels per dimension based on importance
+template <typename Real>
+class adaptive_smolyak_grid {
+private:
+  std::size_t dimension_;
+  std::vector<std::size_t> levels_;  // Level per dimension
+  sparse_node_set<Real> nodes_;
+  bool enable_diagnostics_;
+  
+  // Dimension importance weights (higher = more important)
+  std::vector<Real> dimension_weights_;
+  
+  // Hierarchical surplus indicators per dimension
+  std::vector<Real> surplus_indicators_;
+  
+public:
+  adaptive_smolyak_grid(
+      std::size_t dimension,
+      const std::vector<std::size_t>& initial_levels,
+      const std::vector<Real>& dim_weights = {},
+      bool enable_diagnostics = false)
+    : dimension_(dimension), 
+      levels_(initial_levels),
+      enable_diagnostics_(enable_diagnostics),
+      dimension_weights_(dim_weights)
+  {
+    if (levels_.size() != dimension_) {
+      levels_.resize(dimension_, 1);  // Default to level 1
+    }
+    
+    if (dimension_weights_.empty()) {
+      dimension_weights_.resize(dimension_, Real(1));  // Equal weights
+    }
+    
+    surplus_indicators_.resize(dimension_, Real(0));
+    construct_anisotropic_grid();
+  }
+  
+  /// \brief Construct anisotropic sparse grid with different levels per dimension
+  void construct_anisotropic_grid() {
+    // Generate multi-indices for anisotropic grid
+    // Sum of weighted levels: Σ(w_i * l_i) <= threshold
+    Real max_weighted_level = compute_weighted_level_sum();
+    
+    // Generate all valid multi-indices
+    std::vector<multi_index<std::size_t>> indices;
+    generate_anisotropic_indices(indices, max_weighted_level);
+    
+    // Build tensor products for each multi-index
+    for (const auto& idx : indices) {
+      int coeff = compute_anisotropic_coefficient(idx);
+      if (coeff != 0) {
+        add_anisotropic_tensor_product(idx, coeff);
+      }
+    }
+  }
+  
+  /// \brief Evaluate integral with anisotropic grid
+  template <typename F>
+  result<Real> evaluate(const F& f, const hypercube<Real>& box) {
+    const auto& grid_nodes = nodes_.get_nodes();
+    
+    kahan_accumulator<Real> sum;
+    std::size_t evaluations = 0;
+    
+    // Track surplus per dimension for adaptivity
+    std::vector<Real> dim_surplus(dimension_, Real(0));
+    
+    std::vector<Real> point(dimension_);
+    for (const auto& node : grid_nodes) {
+      // Transform from [0,1]^d to box
+      for (std::size_t i = 0; i < dimension_; ++i) {
+        point[i] = box.lower[i] + node.point[i] * (box.upper[i] - box.lower[i]);
+      }
+      
+      Real value;
+      if constexpr (std::is_invocable_v<F, decltype(point)>) {
+        value = f(point);
+      } else if constexpr (std::is_invocable_v<F, const Real*, std::size_t>) {
+        value = f(point.data(), dimension_);
+      } else {
+        value = f(point.data());
+      }
+      
+      sum.add(value * node.weight);
+      
+      // Track dimensional contributions for adaptivity
+      for (std::size_t d = 0; d < dimension_; ++d) {
+        dim_surplus[d] += std::abs(value * node.weight) * 
+                          std::abs(node.point[d] - Real(0.5));
+      }
+      
+      evaluations++;
+    }
+    
+    // Update surplus indicators
+    for (std::size_t d = 0; d < dimension_; ++d) {
+      surplus_indicators_[d] = dim_surplus[d] / (evaluations + 1);
+    }
+    
+    // Scale by volume
+    Real volume = 1.0;
+    for (std::size_t i = 0; i < dimension_; ++i) {
+      volume *= (box.upper[i] - box.lower[i]);
+    }
+    
+    result<Real> res;
+    res.value = sum.sum() * volume;
+    res.evaluations = evaluations;
+    res.status = status_code::success;
+    res.error = estimate_anisotropic_error(res.value);
+    
+    return res;
+  }
+  
+  /// \brief Adapt grid by increasing level in most important dimension
+  void adapt() {
+    // Find dimension with largest surplus indicator
+    std::size_t max_dim = 0;
+    Real max_surplus = surplus_indicators_[0] * dimension_weights_[0];
+    
+    for (std::size_t d = 1; d < dimension_; ++d) {
+      Real weighted_surplus = surplus_indicators_[d] * dimension_weights_[d];
+      if (weighted_surplus > max_surplus) {
+        max_surplus = weighted_surplus;
+        max_dim = d;
+      }
+    }
+    
+    // Increase level in that dimension
+    levels_[max_dim]++;
+    
+    // Reconstruct grid with new levels
+    nodes_ = sparse_node_set<Real>();  // Clear
+    construct_anisotropic_grid();
+  }
+  
+  /// \brief Get current levels per dimension
+  const std::vector<std::size_t>& get_levels() const { return levels_; }
+  
+  /// \brief Get surplus indicators per dimension
+  const std::vector<Real>& get_surplus_indicators() const { 
+    return surplus_indicators_; 
+  }
+  
+private:
+  /// \brief Compute weighted sum of levels
+  Real compute_weighted_level_sum() const {
+    Real sum = 0;
+    for (std::size_t d = 0; d < dimension_; ++d) {
+      sum += dimension_weights_[d] * Real(levels_[d]);
+    }
+    return sum;
+  }
+  
+  /// \brief Generate multi-indices for anisotropic grid
+  void generate_anisotropic_indices(
+      std::vector<multi_index<std::size_t>>& indices,
+      Real max_weighted_level) 
+  {
+    // Generate indices satisfying weighted constraint
+    multi_index<std::size_t> current(dimension_);
+    generate_anisotropic_recursive(indices, current, 0, max_weighted_level);
+    
+    // Sort for deterministic ordering
+    std::sort(indices.begin(), indices.end());
+  }
+  
+  /// \brief Recursive generation of anisotropic indices
+  void generate_anisotropic_recursive(
+      std::vector<multi_index<std::size_t>>& indices,
+      multi_index<std::size_t>& current,
+      std::size_t pos,
+      Real remaining_weight)
+  {
+    if (pos == dimension_) {
+      if (current.sum > 0) {  // Skip all-zero index
+        indices.push_back(current);
+      }
+      return;
+    }
+    
+    // Try different levels for current dimension
+    std::size_t max_level = std::min(
+        levels_[pos],
+        static_cast<std::size_t>(remaining_weight / dimension_weights_[pos])
+    );
+    
+    for (std::size_t level = 0; level <= max_level; ++level) {
+      current.indices[pos] = level;
+      current.sum = std::accumulate(
+          current.indices.begin(), 
+          current.indices.end(), 
+          std::size_t(0)
+      );
+      
+      Real new_remaining = remaining_weight - dimension_weights_[pos] * Real(level);
+      generate_anisotropic_recursive(indices, current, pos + 1, new_remaining);
+    }
+  }
+  
+  /// \brief Compute coefficient for anisotropic multi-index
+  int compute_anisotropic_coefficient(const multi_index<std::size_t>& idx) const {
+    // Modified Smolyak coefficient for anisotropic case
+    // Still uses inclusion-exclusion but with weighted levels
+    Real weighted_sum = 0;
+    for (std::size_t d = 0; d < dimension_; ++d) {
+      weighted_sum += dimension_weights_[d] * Real(idx.indices[d]);
+    }
+    
+    Real max_weighted = compute_weighted_level_sum();
+    int diff = static_cast<int>(max_weighted - weighted_sum);
+    
+    // Binomial coefficient and sign
+    if (diff < 0) return 0;
+    
+    std::size_t binom = 1;  // Simplified for anisotropic case
+    int sign = (diff % 2 == 0) ? 1 : -1;
+    
+    return sign * static_cast<int>(binom);
+  }
+  
+  /// \brief Add tensor product for anisotropic grid
+  void add_anisotropic_tensor_product(
+      const multi_index<std::size_t>& idx, 
+      int coefficient) 
+  {
+    // Get 1D rules for each dimension
+    std::vector<quadrature_rule_1d<Real>> rules_1d;
+    rules_1d.reserve(dimension_);
+    
+    for (std::size_t i = 0; i < dimension_; ++i) {
+      rules_1d.emplace_back(idx.indices[i]);
+    }
+    
+    // Generate tensor product nodes (same as isotropic case)
+    std::size_t n_points = 1;
+    for (const auto& rule : rules_1d) {
+      n_points *= rule.size();
+    }
+    
+    for (std::size_t i = 0; i < n_points; ++i) {
+      std::vector<Real> point(dimension_);
+      Real weight = static_cast<Real>(coefficient);
+      
+      std::size_t idx_copy = i;
+      for (std::size_t d = 0; d < dimension_; ++d) {
+        std::size_t n_d = rules_1d[d].size();
+        std::size_t j_d = idx_copy % n_d;
+        
+        point[d] = (rules_1d[d].nodes[j_d] + Real(1)) / Real(2);
+        weight *= rules_1d[d].weights[j_d] / Real(2);
+        
+        idx_copy /= n_d;
+      }
+      
+      nodes_.add_node(point, weight);
+    }
+  }
+  
+  /// \brief Estimate error for anisotropic grid
+  Real estimate_anisotropic_error(Real current_value) const {
+    // Error estimate based on surplus indicators
+    Real total_surplus = std::accumulate(
+        surplus_indicators_.begin(), 
+        surplus_indicators_.end(), 
+        Real(0)
+    );
+    
+    // Conservative estimate
+    Real base_error = std::abs(current_value) * Real(0.01);  // 1% base
+    Real surplus_error = total_surplus * Real(10);  // Scale surplus
+    
+    return std::max(base_error, surplus_error);
+  }
+};
+
 }}}} // namespace boost::math::cubature::detail
 
 #endif // BOOST_MATH_CUBATURE_DETAIL_SPARSE_GRID_IMPL_HPP

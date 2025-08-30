@@ -92,6 +92,72 @@ inline std::vector<result<Real>> integrate_sparse_grid_vector(
   return integrate_sparse_grid_vector<Real, F, Policy>(f, box, num_components, level, pol);
 }
 
+/// \brief Integrate using dimension-adaptive sparse grid
+/// \param f Integrand function
+/// \param box Integration domain
+/// \param initial_levels Initial level per dimension (or single level for all)
+/// \param dim_weights Importance weights per dimension (optional)
+/// \param max_evals Maximum function evaluations
+/// \param pol Boost.Math policy
+template <class Real, class F, class Policy = default_policy>
+inline result<Real> integrate_sparse_grid_adaptive(
+    const F& f, 
+    const hypercube<Real>& box,
+    const std::vector<std::size_t>& initial_levels,
+    const std::vector<Real>& dim_weights = {},
+    std::size_t max_evals = 10000,
+    Policy const& /*pol*/ = Policy{})
+{
+  detail::adaptive_smolyak_grid<Real> grid(
+      box.dimension(), initial_levels, dim_weights);
+  
+  result<Real> res = grid.evaluate(f, box);
+  
+  // Adaptive refinement
+  while (res.evaluations < max_evals) {
+    grid.adapt();
+    auto new_res = grid.evaluate(f, box);
+    
+    // Check convergence
+    if (std::abs(new_res.value - res.value) < res.error * Real(0.1)) {
+      break;  // Converged
+    }
+    
+    res = new_res;
+  }
+  
+  return res;
+}
+
+/// \brief Integrate using Gauss-Hermite sparse grid for Gaussian weight
+/// \param f Integrand function (without weight)
+/// \param dim Dimension
+/// \param level Sparse grid level
+/// \param use_genz_keister Use Genz-Keister nested rules (default: false)
+/// \param pol Boost.Math policy
+/// \note Integrates f(x) * exp(-||x||^2) over R^d
+template <class Real, class F, class Policy = default_policy>
+inline result<Real> integrate_sparse_grid_gaussian(
+    const F& f,
+    std::size_t dim,
+    unsigned level,
+    bool use_genz_keister = false,
+    Policy const& /*pol*/ = Policy{})
+{
+  // This would use Gauss-Hermite nodes instead of Clenshaw-Curtis
+  // Implementation deferred to separate PR for clarity
+  result<Real> res;
+  res.value = Real(0);
+  res.error = std::numeric_limits<Real>::max();
+  res.status = status_code::dimension_error;  // Not yet implemented
+  res.evaluations = 0;
+  
+  // TODO: Implement using gauss_hermite_rules.hpp
+  // Will construct sparse grid with Hermite nodes for Gaussian weight
+  
+  return res;
+}
+
 }}} // namespace boost::math::cubature
 
 #endif // BOOST_MATH_CUBATURE_SPARSE_GRID_HPP
