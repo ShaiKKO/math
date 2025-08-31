@@ -16,6 +16,7 @@
 
 // Auto-generated finalized GM 9/7 tables (DCUHRE weights and radii)
 #include "genz_malik_9_7_tables.hpp"
+#include "genz_malik_9_7_tables_defs.hpp"  // C++14 out-of-class definitions
 
 namespace boost { namespace math { namespace cubature { namespace detail {
 

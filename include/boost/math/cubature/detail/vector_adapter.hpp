@@ -148,13 +148,13 @@ public:
 template <typename Real, typename ScalarF>
 class scalar_to_vector_adapter {
 private:
-  const ScalarF& f_;
+  const ScalarF& scalar_integrand_;
   
 public:
-  explicit scalar_to_vector_adapter(const ScalarF& f) : f_(f) {}
+  explicit scalar_to_vector_adapter(const ScalarF& f) : scalar_integrand_(f) {}
   
   void operator()(const Real* x, Real* out, std::size_t /*m*/) const {
-    out[0] = f_(x);
+    out[0] = scalar_integrand_(x);
   }
 };
 
@@ -162,17 +162,17 @@ public:
 template <typename Real, typename VectorF>
 class vector_component_adapter {
 private:
-  const VectorF& f_;
-  std::size_t component_;
-  mutable std::vector<Real> buffer_;
+  const VectorF& vector_integrand_;
+  std::size_t component_index_;
+  mutable std::vector<Real> evaluation_buffer_;
   
 public:
   vector_component_adapter(const VectorF& f, std::size_t component, std::size_t num_components)
-    : f_(f), component_(component), buffer_(num_components) {}
+    : vector_integrand_(f), component_index_(component), evaluation_buffer_(num_components) {}
   
   Real operator()(const Real* x) const {
-    f_(x, buffer_.data(), buffer_.size());
-    return buffer_[component_];
+    vector_integrand_(x, evaluation_buffer_.data(), evaluation_buffer_.size());
+    return evaluation_buffer_[component_index_];
   }
 };
 

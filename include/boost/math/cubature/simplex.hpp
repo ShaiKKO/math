@@ -13,6 +13,7 @@
 #include <cmath>
 #include <algorithm>
 #include <numeric>
+#include <type_traits>
 
 // Project headers
 #include <boost/math/cubature/policies.hpp>
@@ -131,32 +132,32 @@ private:
 template <typename Real, typename F>
 class duffy_simplex_integrand {
 private:
-  const F& f_;
-  const simplex_affine_map<Real>& affine_;
-  std::size_t dim_;
-  mutable std::vector<Real> ref_point_;
-  mutable std::vector<Real> simplex_point_;
+  const F& integrand_function_;
+  const simplex_affine_map<Real>& affine_map_;
+  std::size_t dimension_;
+  mutable std::vector<Real> reference_point_;
+  mutable std::vector<Real> physical_point_;
   
 public:
   duffy_simplex_integrand(const F& f, const simplex_affine_map<Real>& map, 
                           std::size_t dim)
-    : f_(f), affine_(map), dim_(dim), 
-      ref_point_(dim), simplex_point_(dim) {}
+    : integrand_function_(f), affine_map_(map), dimension_(dim), 
+      reference_point_(dim), physical_point_(dim) {}
   
   Real operator()(const Real* u) const {
     // Apply Duffy transform: [0,1]^d → reference simplex
-    Real duffy_jac = duffy_transform<Real>::apply(u, ref_point_.data(), dim_);
+    Real duffy_jac = duffy_transform<Real>::apply(u, reference_point_.data(), dimension_);
     
     // Apply affine map: reference simplex → general simplex
-    affine_.map_to_simplex(ref_point_.data(), simplex_point_.data());
-    Real affine_jac = affine_.jacobian();
+    affine_map_.map_to_simplex(reference_point_.data(), physical_point_.data());
+    Real affine_jac = affine_map_.jacobian();
     
     // Evaluate integrand with combined Jacobian
-    Real value = evaluate_integrand(simplex_point_.data());
+    Real value = evaluate_integrand(physical_point_.data());
     return value * duffy_jac * affine_jac;
   }
   
-  Real operator()(const Real* u, std::size_t n) const {
+  Real operator()(const Real* u, std::size_t /* dimension */) const {
     return (*this)(u);
   }
   
@@ -165,16 +166,44 @@ public:
   }
   
 private:
+  // SFINAE helper for detecting function signatures
+  template <typename Func, typename = void>
+  struct function_traits {
+    static constexpr int signature = 0; // vector signature
+  };
+  
+  template <typename Func>
+  struct function_traits<Func, 
+      typename std::enable_if<
+        std::is_convertible<decltype(std::declval<Func>()(std::declval<const Real*>(), std::declval<std::size_t>())), Real>::value
+      >::type> {
+    static constexpr int signature = 1; // pointer + size signature
+  };
+  
+  template <typename Func>
+  struct function_traits<Func,
+      typename std::enable_if<
+        !std::is_convertible<decltype(std::declval<Func>()(std::declval<const Real*>(), std::declval<std::size_t>())), Real>::value &&
+        std::is_convertible<decltype(std::declval<Func>()(std::declval<const Real*>())), Real>::value
+      >::type> {
+    static constexpr int signature = 2; // pointer only signature
+  };
+  
+  Real evaluate_integrand_dispatch(const Real* x, std::integral_constant<int, 0>) const {
+    std::vector<Real> vec(x, x + dimension_);
+    return integrand_function_(vec);
+  }
+  
+  Real evaluate_integrand_dispatch(const Real* x, std::integral_constant<int, 1>) const {
+    return integrand_function_(x, dimension_);
+  }
+  
+  Real evaluate_integrand_dispatch(const Real* x, std::integral_constant<int, 2>) const {
+    return integrand_function_(x);
+  }
+  
   Real evaluate_integrand(const Real* x) const {
-    // Support multiple integrand signatures
-    if constexpr (std::is_invocable_v<F, const Real*, std::size_t>) {
-      return f_(x, dim_);
-    } else if constexpr (std::is_invocable_v<F, const Real*>) {
-      return f_(x);
-    } else {
-      std::vector<Real> vec(x, x + dim_);
-      return f_(vec);
-    }
+    return evaluate_integrand_dispatch(x, std::integral_constant<int, function_traits<F>::signature>());
   }
 };
 

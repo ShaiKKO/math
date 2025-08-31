@@ -11,6 +11,7 @@
 // STL headers first (before namespace) per Boost conventions
 #include <vector>
 #include <unordered_map>
+#include <map>
 #include <cmath>
 #include <algorithm>
 #include <numeric>
@@ -20,11 +21,58 @@
 
 // Project headers after STL
 #include <boost/math/cubature/detail/cc_rules.hpp>
+#include <boost/math/cubature/detail/gauss_hermite_rules.hpp>
 #include <boost/math/cubature/detail/adaptivity.hpp>
 #include <boost/math/cubature/policies.hpp>
 #include <boost/math/cubature/regions.hpp>
 
 namespace boost { namespace math { namespace cubature { namespace detail {
+
+// Signature detection traits for integrand functions
+template <typename F, typename Real, typename... Args>
+struct has_raw_pointer_signature {
+private:
+  template <typename U>
+  static auto test(int) -> decltype(
+    std::declval<U>()(std::declval<const Real*>(), std::declval<std::size_t>()),
+    std::true_type{});
+  
+  template <typename>
+  static std::false_type test(...);
+  
+public:
+  static constexpr bool value = decltype(test<F>(0))::value;
+};
+
+template <typename F, typename Real>
+struct has_vector_signature {
+private:
+  template <typename U>
+  static auto test(int) -> decltype(
+    std::declval<U>()(std::declval<const std::vector<Real>&>()),
+    std::true_type{});
+  
+  template <typename>
+  static std::false_type test(...);
+  
+public:
+  static constexpr bool value = decltype(test<F>(0))::value;
+};
+
+template <typename F, typename Real>
+struct has_raw_pointer_only_signature {
+private:
+  template <typename U>
+  static auto test(int) -> decltype(
+    std::declval<U>()(std::declval<const Real*>()),
+    std::true_type{});
+  
+  template <typename>
+  static std::false_type test(...);
+  
+public:
+  static constexpr bool value = decltype(test<F>(0))::value;
+};
 
 /// \brief Multi-index for Smolyak sparse grid construction
 /// \details Represents i = (i₁, i₂, ..., iₐ) with |i| = Σiⱼ
@@ -224,9 +272,9 @@ private:
     unique_nodes_.clear();
     unique_nodes_.reserve(node_map_.size());
     
-    for (const auto& [point, weight_pair] : node_map_) {
+    for (const auto& node_entry : node_map_) {
       // Extract final accumulated weight from Kahan sum
-      unique_nodes_.emplace_back(point, weight_pair.first);
+      unique_nodes_.emplace_back(node_entry.first, node_entry.second.first);
     }
     
     // Sort for deterministic ordering
@@ -237,6 +285,46 @@ private:
     
     finalized_ = true;
   }
+};
+
+// SFINAE helper for detecting integrand signature (shared by both grid classes)
+// Primary template defaults to 0 (invalid)
+template <typename Real, typename Func, typename Point, typename = void>
+struct integrand_traits {
+  static constexpr int signature = 0;
+};
+
+// Specialization for f(vector) signature
+template <typename Real, typename Func, typename Point>
+struct integrand_traits<Real, Func, Point,
+    typename std::enable_if<
+      std::is_same<Real, decltype(std::declval<const Func&>()(std::declval<const Point&>()))>::value
+    >::type> {
+  static constexpr int signature = 1;
+};
+
+// Specialization for f(pointer, size) signature - most common
+template <typename Real, typename Func, typename Point>
+struct integrand_traits<Real, Func, Point,
+    typename std::enable_if<
+      std::is_same<Real, decltype(std::declval<const Func&>()(
+        std::declval<const Real*>(), 
+        std::declval<std::size_t>()))>::value
+    >::type> {
+  static constexpr int signature = 2;
+};
+
+// Specialization for f(pointer) signature
+template <typename Real, typename Func, typename Point>
+struct integrand_traits<Real, Func, Point,
+    typename std::enable_if<
+      !std::is_same<Real, decltype(std::declval<const Func&>()(
+        std::declval<const Real*>(), 
+        std::declval<std::size_t>()))>::value &&
+      std::is_same<Real, decltype(std::declval<const Func&>()(
+        std::declval<const Real*>()))>::value
+    >::type> {
+  static constexpr int signature = 3;
 };
 
 /// \brief Smolyak sparse grid construction and integration
@@ -258,6 +346,28 @@ private:
     Real weight_cancellation_ratio = 0;  // |sum|weights|| / |sum weights|
     bool has_weight_issues = false;
   } diagnostics_;
+  
+  // Tag dispatch functions
+  template <typename Func>
+  Real evaluate_integrand_dispatch(const Func&, const std::vector<Real>&, std::integral_constant<int, 0>) const {
+    static_assert(sizeof(Func) == 0, "Integrand must be callable");
+    return Real{};
+  }
+  
+  template <typename Func>
+  Real evaluate_integrand_dispatch(const Func& f, const std::vector<Real>& point, std::integral_constant<int, 1>) const {
+    return f(point);
+  }
+  
+  template <typename Func>
+  Real evaluate_integrand_dispatch(const Func& f, const std::vector<Real>& point, std::integral_constant<int, 2>) const {
+    return f(point.data(), dimension_);
+  }
+  
+  template <typename Func>
+  Real evaluate_integrand_dispatch(const Func& f, const std::vector<Real>& point, std::integral_constant<int, 3>) const {
+    return f(point.data());
+  }
   
 public:
   smolyak_grid(std::size_t dimension, std::size_t level, bool enable_diagnostics = false)
@@ -301,20 +411,9 @@ public:
         point[i] = box.lower[i] + node.point[i] * (box.upper[i] - box.lower[i]);
       }
       
-      // Support multiple integrand signatures
-      Real value;
-      if constexpr (std::is_invocable_v<F, decltype(point)>) {
-        // f(std::vector<Real>)
-        value = f(point);
-      } else if constexpr (std::is_invocable_v<F, const Real*, std::size_t>) {
-        // f(const Real*, std::size_t)
-        value = f(point.data(), dimension_);
-      } else if constexpr (std::is_invocable_v<F, const Real*>) {
-        // f(const Real*) - legacy support
-        value = f(point.data());
-      } else {
-        static_assert(sizeof(F) == 0, "Integrand must be callable with vector<Real>, (const Real*, size_t), or const Real*");
-      }
+      // Support multiple integrand signatures via tag dispatch
+      Real value = evaluate_integrand_dispatch(f, point, 
+          std::integral_constant<int, integrand_traits<Real, F, decltype(point)>::signature>());
       
       if (value < 0) all_positive = false;
       min_value = std::min(min_value, value);
@@ -600,6 +699,28 @@ private:
   // Hierarchical surplus indicators per dimension
   std::vector<Real> surplus_indicators_;
   
+  // Tag dispatch functions for evaluating integrand
+  template <typename Func>
+  Real evaluate_integrand_dispatch(const Func&, const std::vector<Real>&, std::integral_constant<int, 0>) const {
+    static_assert(sizeof(Func) == 0, "Integrand must be callable");
+    return Real{};
+  }
+  
+  template <typename Func>
+  Real evaluate_integrand_dispatch(const Func& f, const std::vector<Real>& point, std::integral_constant<int, 1>) const {
+    return f(point);
+  }
+  
+  template <typename Func>
+  Real evaluate_integrand_dispatch(const Func& f, const std::vector<Real>& point, std::integral_constant<int, 2>) const {
+    return f(point.data(), dimension_);
+  }
+  
+  template <typename Func>
+  Real evaluate_integrand_dispatch(const Func& f, const std::vector<Real>& point, std::integral_constant<int, 3>) const {
+    return f(point.data());
+  }
+  
 public:
   adaptive_smolyak_grid(
       std::size_t dimension,
@@ -660,14 +781,8 @@ public:
         point[i] = box.lower[i] + node.point[i] * (box.upper[i] - box.lower[i]);
       }
       
-      Real value;
-      if constexpr (std::is_invocable_v<F, decltype(point)>) {
-        value = f(point);
-      } else if constexpr (std::is_invocable_v<F, const Real*, std::size_t>) {
-        value = f(point.data(), dimension_);
-      } else {
-        value = f(point.data());
-      }
+      Real value = evaluate_integrand_dispatch(f, point, 
+          std::integral_constant<int, integrand_traits<Real, F, decltype(point)>::signature>());
       
       sum.add(value * node.weight);
       
@@ -861,6 +976,208 @@ private:
     return std::max(base_error, surplus_error);
   }
 };
+
+/// \brief Gauss-Hermite sparse grid for integration with Gaussian weight
+/// \details Integrates f(x) * exp(-||x||^2) over R^d using sparse grid
+///          constructed from 1D Gauss-Hermite or Genz-Keister rules
+template <typename Real>
+class gauss_hermite_sparse_grid {
+private:
+  std::size_t dimension_;
+  std::size_t level_;
+  bool use_genz_keister_;
+  
+  // Store transformed nodes and weights
+  std::vector<std::vector<Real>> nodes_;
+  std::vector<Real> weights_;
+  
+public:
+  gauss_hermite_sparse_grid(std::size_t dim, std::size_t level, bool use_gk = false)
+    : dimension_(dim), level_(level), use_genz_keister_(use_gk) {
+    construct_grid();
+  }
+  
+  /// \brief Construct Smolyak sparse grid with Gauss-Hermite nodes
+  void construct_grid() {
+    // Clear existing data
+    nodes_.clear();
+    weights_.clear();
+    
+    // Generate multi-indices for Smolyak formula
+    multi_index_set<std::size_t> index_set(dimension_, level_);
+    
+    // Map to accumulate nodes and weights with deduplication
+    std::map<std::vector<Real>, Real> node_weights;
+    
+    // Build tensor products for each multi-index
+    for (const auto& idx : index_set.indices()) {
+      int coeff = index_set.coefficient(idx);
+      if (coeff == 0) continue;
+      
+      // Construct tensor product for this multi-index
+      add_tensor_product(idx, coeff, node_weights);
+    }
+    
+    // Extract deduplicated nodes and weights
+    for (const auto& pair : node_weights) {
+      if (std::abs(pair.second) > std::numeric_limits<Real>::epsilon()) {
+        nodes_.push_back(pair.first);
+        weights_.push_back(pair.second);
+      }
+    }
+  }
+  
+  /// \brief Add tensor product of 1D rules to the sparse grid
+  void add_tensor_product(
+      const multi_index<std::size_t>& idx,
+      int coeff,
+      std::map<std::vector<Real>, Real>& node_weights) 
+  {
+    // Get 1D rules for each dimension
+    std::vector<gauss_hermite_rule_1d<Real>> rules_1d;
+    rules_1d.reserve(dimension_);
+    
+    std::size_t total_points = 1;
+    for (std::size_t d = 0; d < dimension_; ++d) {
+      std::size_t level_d = idx.indices[d];
+      rules_1d.emplace_back(level_d, use_genz_keister_);
+      total_points *= rules_1d[d].size();
+    }
+    
+    // Generate all tensor product points
+    for (std::size_t i = 0; i < total_points; ++i) {
+      std::vector<Real> point(dimension_);
+      Real weight = Real(coeff);
+      
+      std::size_t idx_copy = i;
+      for (std::size_t d = 0; d < dimension_; ++d) {
+        std::size_t n_d = rules_1d[d].size();
+        std::size_t j = idx_copy % n_d;
+        
+        point[d] = rules_1d[d].nodes[j];
+        weight *= rules_1d[d].weights[j];
+        
+        idx_copy /= n_d;
+      }
+      
+      // Add to map (automatic deduplication)
+      node_weights[point] += weight;
+    }
+  }
+  
+  /// \brief Evaluate integrand at all sparse grid points
+  template <typename F>
+  result<Real> evaluate(const F& f) const {
+    result<Real> res;
+    res.value = Real(0);
+    res.error = Real(0);
+    res.evaluations = nodes_.size();
+    res.status = status_code::success;
+    
+    // Use Kahan summation for numerical stability
+    kahan_accumulator<Real> sum_acc;
+    
+    for (std::size_t i = 0; i < nodes_.size(); ++i) {
+      Real f_val = evaluate_integrand(f, nodes_[i]);
+      sum_acc.add(f_val * weights_[i]);
+    }
+    
+    res.value = sum_acc.sum();
+    
+    // Error estimate based on weight cancellation and grid level
+    Real weight_sum = std::accumulate(weights_.begin(), weights_.end(), Real(0),
+                                      [](Real a, Real b) { return a + std::abs(b); });
+    Real actual_weight = std::abs(std::accumulate(weights_.begin(), weights_.end(), Real(0)));
+    
+    if (weight_sum > Real(0)) {
+      Real cancellation_ratio = actual_weight / weight_sum;
+      
+      // Higher cancellation means less reliable result
+      if (cancellation_ratio < Real(0.1)) {
+        res.error = std::abs(res.value) * Real(1.0);  // 100% uncertainty
+      } else if (cancellation_ratio < Real(0.5)) {
+        res.error = std::abs(res.value) * Real(0.1);  // 10% uncertainty
+      } else {
+        // Standard error estimate for well-conditioned case
+        res.error = std::abs(res.value) * std::pow(Real(10), -Real(level_ + 1));
+      }
+    } else {
+      res.error = std::numeric_limits<Real>::max();
+    }
+    
+    return res;
+  }
+  
+private:
+  /// \brief Evaluate integrand with runtime signature detection
+  template <typename F>
+  Real evaluate_integrand(const F& f, const std::vector<Real>& point) const {
+    return evaluate_integrand_dispatch(f, point);
+  }
+  
+  /// \brief Dispatch helper for different integrand signatures
+  template <typename F>
+  auto evaluate_integrand_dispatch(const F& f, const std::vector<Real>& point) const
+    -> typename std::enable_if<
+         has_raw_pointer_signature<F, Real, std::size_t>::value,
+         Real>::type
+  {
+    return f(point.data(), dimension_);
+  }
+  
+  template <typename F>
+  auto evaluate_integrand_dispatch(const F& f, const std::vector<Real>& point) const
+    -> typename std::enable_if<
+         !has_raw_pointer_signature<F, Real, std::size_t>::value &&
+         has_vector_signature<F, Real>::value,
+         Real>::type
+  {
+    return f(point);
+  }
+  
+  template <typename F>
+  auto evaluate_integrand_dispatch(const F& f, const std::vector<Real>& point) const
+    -> typename std::enable_if<
+         !has_raw_pointer_signature<F, Real, std::size_t>::value &&
+         !has_vector_signature<F, Real>::value &&
+         has_raw_pointer_only_signature<F, Real>::value,
+         Real>::type
+  {
+    return f(point.data());
+  }
+};
+
+/// \brief Integration function for Gaussian-weighted sparse grid
+template <typename Real, typename F>
+result<Real> integrate_sparse_grid_gaussian_impl(
+    const F& f,
+    std::size_t dim,
+    unsigned level,
+    bool use_genz_keister)
+{
+  // Validate input
+  if (dim == 0) {
+    result<Real> res;
+    res.value = Real(0);
+    res.error = std::numeric_limits<Real>::max();
+    res.status = status_code::dimension_error;
+    res.evaluations = 0;
+    return res;
+  }
+  
+  if (level == 0) {
+    result<Real> res;
+    res.value = Real(0);
+    res.error = std::numeric_limits<Real>::max();
+    res.status = status_code::invalid_input;
+    res.evaluations = 0;
+    return res;
+  }
+  
+  // Construct and evaluate sparse grid
+  gauss_hermite_sparse_grid<Real> grid(dim, level, use_genz_keister);
+  return grid.evaluate(f);
+}
 
 }}}} // namespace boost::math::cubature::detail
 

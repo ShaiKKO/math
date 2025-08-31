@@ -18,7 +18,7 @@
 namespace boost { namespace math { namespace cubature { namespace detail {
 
 /// \brief Convergence history tracker for reliability analysis
-/// \details Staff+ level implementation for tracking integration convergence behavior
+/// \details Implementation for tracking integration convergence behavior
 template <typename Real>
 class convergence_history {
 public:

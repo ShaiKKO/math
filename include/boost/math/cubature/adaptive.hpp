@@ -42,17 +42,39 @@ namespace boost { namespace math { namespace cubature {
 /// \date 2025
 
 /// \brief Integrate using adaptive subdivision with embedded error estimation
+/// 
+/// \details This function performs multidimensional numerical integration using the
+///          DCUHRE algorithm with Genz-Malik embedded rule pairs for error estimation.
+///          The algorithm recursively subdivides the integration domain, always refining
+///          the region with the largest estimated error (global adaptive strategy).
+///
 /// \tparam Real Floating-point type (float, double, long double, or multiprecision)
 /// \tparam F Integrand type callable as f(const std::vector<Real>&) -> Real
-/// \tparam Policy Boost.Math policy type for error handling
+/// \tparam Policy Boost.Math policy type for error handling and precision control
+/// 
 /// \param f Integrand function accepting std::vector<Real> and returning Real
-/// \param box Integration domain (hypercube)
-/// \param abs_tol Absolute error tolerance
-/// \param rel_tol Relative error tolerance
-/// \param max_eval Maximum number of function evaluations (0 = automatic)
-/// \param pol Boost.Math policy object
-/// \return result<Real> containing integral estimate, error bound, and diagnostics
+/// \param box Integration domain (hypercube) defining the bounds [a,b]^d
+/// \param abs_tol Absolute error tolerance for convergence
+/// \param rel_tol Relative error tolerance for convergence  
+/// \param max_eval Maximum number of function evaluations (0 = automatic, default: 1M)
+/// \param pol Boost.Math policy object for customizing error handling
+/// 
+/// \return result<Real> containing:
+///         - value: Estimated integral value
+///         - error: Conservative error estimate
+///         - evaluations: Number of integrand evaluations performed
+///         - status: Success/failure indicator
+///         - reliability: Convergence quality metrics
+///
+/// \throws std::domain_error if dimension is outside supported range [2,15]
+/// \throws std::runtime_error if integrand evaluation fails
+/// 
+/// \complexity O(N) integrand evaluations where N depends on function smoothness
+/// \invariant Error estimate is conservative (typically overestimates true error)
+/// 
 /// \note Dimensions 2-15 are supported with optimized Genz-Malik rules
+/// \note Uses degree 9/7 embedded pair for dimensions 2-6, degree 7/5 for 7-15
+/// \note Automatically selects subdivision axis using fourth-difference criterion
 template <class Real, class F, class Policy = default_policy
 #if !__cpp_concepts
   , typename = typename std::enable_if<is_scalar_integrand<F, Real>::value>::type
@@ -67,7 +89,7 @@ inline result<Real> integrate_adaptive(const F& f, const hypercube<Real>& box,
                                        Policy const& pol = Policy{})
 {
   // Create integrator and run
-  detail::adaptive_integrator<Real, F, Policy> integrator(
+  detail::AdaptiveIntegrator<Real, F, Policy> integrator(
     f, box, abs_tol, rel_tol, max_eval, pol);
   
   return integrator.integrate();

@@ -145,21 +145,8 @@ public:
     }
     
     // 4. Axis points λ₃ (degree-9 only)
-    if constexpr (Degree >= 9) {
-      for (std::size_t d = 0; d < Dim; ++d) {
-        // +λ₃ along axis d
-        point = center;
-        point[d] += lambda3 * half_widths[d];
-        values.f_axis_l3_plus[d] = evaluate_at(f, point);
-        
-        // -λ₃ along axis d
-        point = center;
-        point[d] -= lambda3 * half_widths[d];
-        values.f_axis_l3_minus[d] = evaluate_at(f, point);
-        
-        evals += 2;
-      }
-    }
+    evaluate_axis_l3_points(f, center, half_widths, lambda3, values, evals,
+                            std::integral_constant<bool, (Degree >= 9)>());
     
     // 5. Pair orbits (λ₁,λ₁)
     values.f_pairs.clear();
@@ -278,20 +265,88 @@ public:
   
   
 private:
+  // Helper function for degree-9 axis points (SFINAE dispatch)
+  template <typename F, std::size_t Dim>
+  static void evaluate_axis_l3_points(
+      const F& f,
+      const std::array<Real, Dim>& center,
+      const std::array<Real, Dim>& half_widths,
+      Real lambda3,
+      orbit_values<Dim>& values,
+      std::size_t& evals,
+      std::true_type) // Degree >= 9
+  {
+    std::array<Real, Dim> point;
+    for (std::size_t d = 0; d < Dim; ++d) {
+      // +λ₃ along axis d
+      point = center;
+      point[d] += lambda3 * half_widths[d];
+      values.f_axis_l3_plus[d] = evaluate_at(f, point);
+      
+      // -λ₃ along axis d
+      point = center;
+      point[d] -= lambda3 * half_widths[d];
+      values.f_axis_l3_minus[d] = evaluate_at(f, point);
+      
+      evals += 2;
+    }
+  }
+  
+  template <typename F, std::size_t Dim>
+  static void evaluate_axis_l3_points(
+      const F&, const std::array<Real, Dim>&,
+      const std::array<Real, Dim>&, Real,
+      orbit_values<Dim>&, std::size_t&,
+      std::false_type) // Degree < 9
+  {
+    // No-op for degree < 9
+  }
+  
+  // SFINAE helper for function signature detection
+  template <typename F, typename Point, typename = void>
+  struct function_signature {
+    static constexpr int value = 0; // vector
+  };
+  
+  template <typename F, typename Point>
+  struct function_signature<F, Point,
+      typename std::enable_if<
+        std::is_convertible<decltype(std::declval<F>()(std::declval<const Real*>(), std::declval<std::size_t>())), Real>::value
+      >::type> {
+    static constexpr int value = 1; // pointer + size
+  };
+  
+  template <typename F, typename Point>
+  struct function_signature<F, Point,
+      typename std::enable_if<
+        !std::is_convertible<decltype(std::declval<F>()(std::declval<const Real*>(), std::declval<std::size_t>())), Real>::value &&
+        std::is_convertible<decltype(std::declval<F>()(std::declval<const Real*>())), Real>::value
+      >::type> {
+    static constexpr int value = 2; // pointer only
+  };
+  
+  // Tag dispatch functions
+  template <typename F, std::size_t Dim>
+  static Real evaluate_at_dispatch(const F& f, const std::array<Real, Dim>& point, std::integral_constant<int, 0>) {
+    std::vector<Real> vec(point.begin(), point.end());
+    return f(vec);
+  }
+  
+  template <typename F, std::size_t Dim>
+  static Real evaluate_at_dispatch(const F& f, const std::array<Real, Dim>& point, std::integral_constant<int, 1>) {
+    return f(point.data(), Dim);
+  }
+  
+  template <typename F, std::size_t Dim>
+  static Real evaluate_at_dispatch(const F& f, const std::array<Real, Dim>& point, std::integral_constant<int, 2>) {
+    return f(point.data());
+  }
+  
   /// \brief Helper to evaluate function with proper signature handling
   template <typename F, std::size_t Dim>
   static Real evaluate_at(const F& f, const std::array<Real, Dim>& point) {
-    if constexpr (std::is_invocable_v<F, const Real*, std::size_t>) {
-      // f(const Real*, std::size_t)
-      return f(point.data(), Dim);
-    } else if constexpr (std::is_invocable_v<F, const Real*>) {
-      // f(const Real*) - legacy support
-      return f(point.data());
-    } else {
-      // f(std::vector<Real>)
-      std::vector<Real> vec(point.begin(), point.end());
-      return f(vec);
-    }
+    return evaluate_at_dispatch(f, point, 
+        std::integral_constant<int, function_signature<F, decltype(point)>::value>());
   }
 };
 

@@ -8,6 +8,7 @@
 #ifndef BOOST_MATH_CUBATURE_DETAIL_GENZ_MALIK_EVALUATOR_HPP
 #define BOOST_MATH_CUBATURE_DETAIL_GENZ_MALIK_EVALUATOR_HPP
 
+#include <boost/math/cubature/constants.hpp>
 #include <boost/math/cubature/detail/adaptivity.hpp>
 #include <boost/math/cubature/detail/gm_rules.hpp>
 #include <boost/math/cubature/detail/orbit_evaluator.hpp>
@@ -22,30 +23,90 @@
 namespace boost { namespace math { namespace cubature { namespace detail {
 
 /// \brief Result of evaluating embedded Genz-Malik rule pair
+/// \details Contains both primary and embedded rule estimates for error estimation,
+///          along with directional variation information for adaptive subdivision.
 template <typename Real>
-struct embedded_pair_result {
-  Real estimate_fine;     // Higher-degree rule estimate
-  Real estimate_coarse;   // Lower-degree rule estimate  
-  Real embedded_error;    // |fine - coarse|
-  Real spread_estimate;   // max-min of partial sums for safeguarding
-  std::size_t evaluations;
-  std::array<Real, 15> fourth_differences;  // Directional fourth differences (max dimension 15)
-  std::size_t split_dimension;              // Best axis to split
+struct EmbeddedRulePairResult {
+  Real primary_estimate;         ///< Higher-degree rule estimate (degree 7 or 9)
+  Real embedded_estimate;        ///< Lower-degree rule estimate (degree 5 or 7)
+  Real error_estimate;           ///< Absolute difference between rule estimates
+  Real variation_bound;          ///< Max-min spread of partial sums for error safeguarding
+  std::size_t function_evaluations; ///< Number of integrand evaluations used
+  std::array<Real, 15> directional_fourth_differences; ///< Fourth differences for each axis
+  std::size_t optimal_split_axis;   ///< Axis with maximum variation for subdivision
   
-  // Cached orbit evaluations for potential reuse
-  std::shared_ptr<void> cached_values;      // Type-erased storage
+  // Performance optimization: cached evaluations for potential reuse
+  std::shared_ptr<void> cached_orbit_values; ///< Type-erased storage for orbit points
   
-  embedded_pair_result() 
-    : estimate_fine(0), estimate_coarse(0), embedded_error(0),
-      spread_estimate(0), evaluations(0), split_dimension(0) {
-    std::fill(fourth_differences.begin(), fourth_differences.end(), Real(0));
+  EmbeddedRulePairResult() 
+    : primary_estimate(0), 
+      embedded_estimate(0), 
+      error_estimate(0),
+      variation_bound(0), 
+      function_evaluations(0), 
+      optimal_split_axis(0) {
+    std::fill(directional_fourth_differences.begin(), 
+              directional_fourth_differences.end(), Real(0));
   }
+  
+  // Backward compatibility
+  Real estimate_fine() const { return primary_estimate; }
+  Real estimate_coarse() const { return embedded_estimate; }
+  Real embedded_error() const { return error_estimate; }
+  Real spread_estimate() const { return variation_bound; }
+  std::size_t evaluations() const { return function_evaluations; }
+  std::size_t split_dimension() const { return optimal_split_axis; }
+};
+
+// Maintain backward compatibility
+template <typename Real>
+using embedded_pair_result = EmbeddedRulePairResult<Real>;
+
+// SFINAE helper for detecting integrand signature
+template <typename F, typename Point, typename = void>
+struct integrand_signature {
+    static constexpr int value = 0; // default: vector
+};
+
+template <typename F, typename Point>
+struct integrand_signature<F, Point,
+    typename std::enable_if<
+        std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>(), std::declval<std::size_t>())), typename Point::value_type>::value
+    >::type> {
+    static constexpr int value = 1; // pointer + size
+};
+
+template <typename F, typename Point>
+struct integrand_signature<F, Point,
+    typename std::enable_if<
+        !std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>(), std::declval<std::size_t>())), typename Point::value_type>::value &&
+        std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>())), typename Point::value_type>::value
+    >::type> {
+    static constexpr int value = 2; // pointer only
 };
 
 /// \brief Genz-Malik rule evaluator with proper table access
-/// \details Staff+ level implementation following Boost.Math patterns
+/// \details Implementation following Boost.Math patterns
 template <typename Real>
 class genz_malik_evaluator {
+private:
+  // Tag dispatch functions for evaluating integrand
+  template <typename F, typename Point>
+  static typename Point::value_type evaluate_integrand_dispatch(const F& f, const Point& point, std::integral_constant<int, 0>) {
+    std::vector<typename Point::value_type> vec(point.begin(), point.end());
+    return f(vec);
+  }
+  
+  template <typename F, typename Point>
+  static typename Point::value_type evaluate_integrand_dispatch(const F& f, const Point& point, std::integral_constant<int, 1>) {
+    return f(point.data(), point.size());
+  }
+  
+  template <typename F, typename Point>
+  static typename Point::value_type evaluate_integrand_dispatch(const F& f, const Point& point, std::integral_constant<int, 2>) {
+    return f(point.data());
+  }
+  
 public:
   static constexpr int degree_fine = 9;
   static constexpr int degree_coarse = 7;
@@ -69,14 +130,27 @@ public:
     using rule_fine = rule_fam<degree_fine, Dim, family_9_7>;
     using rule_coarse = rule_fam<degree_coarse, Dim, family_9_7>;
     
-    if constexpr (!rule_fine::available || !rule_coarse::available) {
-      return false;
-    }
+    // Use SFINAE-based check instead of if constexpr
+    return evaluate_embedded_pair_impl<rule_fine, rule_coarse, F, Dim>(f, reg, result, parent_cache,
+        std::integral_constant<bool, rule_fine::available && rule_coarse::available>());
+  }
+  
+private:
+  // Implementation when rules are available
+  template <typename RuleFine, typename RuleCoarse, typename F, std::size_t Dim>
+  static bool evaluate_embedded_pair_impl(
+      const F& f,
+      const region<Real>& reg,
+      embedded_pair_result<Real>& result,
+      const std::shared_ptr<void>& parent_cache,
+      std::true_type) // rules available
+  {
+    using namespace boost::math::cubature::detail::gm;
     
     // Get nodes and weights from actual tables
-    const auto nodes = rule_fine::template nodes<Real>();
-    const auto weights_fine = rule_fine::template weights<Real>();
-    const auto weights_coarse = rule_coarse::template weights<Real>();
+    const auto nodes = RuleFine::template nodes<Real>();
+    const auto weights_fine = RuleFine::template weights<Real>();
+    const auto weights_coarse = RuleCoarse::template weights<Real>();
     
     const std::size_t num_nodes = nodes.size();
     
@@ -120,7 +194,7 @@ public:
       Real value;
       
       // Transform node from [0,1]^d to physical space
-      transform_node<Dim>(nodes[i], reg, point);
+      transform_reference_node_to_region<Dim>(nodes[i], reg, point);
       
       // Check if we can reuse a cached value
       const Real* cached_value = nullptr;
@@ -134,18 +208,9 @@ public:
         value = *cached_value;
         reused_count++;
       } else {
-        // Evaluate integrand - support multiple signatures
-        if constexpr (std::is_invocable_v<F, const Real*, std::size_t>) {
-          // f(const Real*, std::size_t)
-          value = f(point.data(), Dim);
-        } else if constexpr (std::is_invocable_v<F, const Real*>) {
-          // f(const Real*) - legacy support
-          value = f(point.data());
-        } else {
-          // f(std::vector<Real>)
-          std::vector<Real> vec(point.begin(), point.end());
-          value = f(vec);
-        }
+        // Evaluate integrand using tag dispatch
+        value = evaluate_integrand_dispatch(f, point, 
+            std::integral_constant<int, integrand_signature<F, decltype(point)>::value>());
       }
       
       function_values.push_back(value);
@@ -170,37 +235,49 @@ public:
     Real jacobian = reg.volume();
     
     // Final estimates
-    result.estimate_fine = sum_fine.sum() * jacobian;
-    result.estimate_coarse = sum_coarse.sum() * jacobian;
-    result.embedded_error = std::abs(result.estimate_fine - result.estimate_coarse);
-    result.spread_estimate = (max_partial - min_partial) * jacobian;
-    result.evaluations = num_nodes - reused_count;  // Only count new evaluations
+    result.primary_estimate = sum_fine.sum() * jacobian;
+    result.embedded_estimate = sum_coarse.sum() * jacobian;
+    result.error_estimate = std::abs(result.primary_estimate - result.embedded_estimate);
+    result.variation_bound = (max_partial - min_partial) * jacobian;
+    result.function_evaluations = num_nodes - reused_count;  // Only count new evaluations
     
     // Compute fourth differences from the evaluated points for axis selection
-    compute_fourth_differences<Dim>(nodes, function_values, reg, result);
+    compute_directional_fourth_differences<Dim>(nodes, function_values, reg, result);
     
     // Store cache for potential reuse by child regions
-    result.cached_values = new_cache;
+    result.cached_orbit_values = new_cache;
     
     // Apply safeguarding
-    safeguard_error(result);
+    apply_error_safeguarding(result);
     
     return true;
   }
   
+  // Implementation when rules are not available
+  template <typename RuleFine, typename RuleCoarse, typename F, std::size_t Dim>
+  static bool evaluate_embedded_pair_impl(
+      const F&,
+      const region<Real>&,
+      embedded_pair_result<Real>&,
+      const std::shared_ptr<void>&,
+      std::false_type) // rules not available
+  {
+    return false;
+  }
+  
   /// \brief Get split dimension from result (already computed)
   template <std::size_t Dim>
-  static std::size_t select_split_dimension(
+  static std::size_t select_optimal_split_axis(
       const embedded_pair_result<Real>& result,
       const region<Real>& /*reg*/)
   {
-    return result.split_dimension;
+    return result.optimal_split_axis;
   }
   
 private:
   /// \brief Transform node from [0,1]^d reference to region
   template <std::size_t Dim>
-  static void transform_node(
+  static void transform_reference_node_to_region(
       const std::array<Real, Dim>& ref_node,
       const region<Real>& reg,
       std::array<Real, Dim>& point)
@@ -214,15 +291,15 @@ private:
   /// \details Uses orbit structure to compute proper fourth differences
   ///          Following van Dooren and de Ridder formula
   template <std::size_t Dim, typename NodesArray>
-  static void compute_fourth_differences(
+  static void compute_directional_fourth_differences(
       const NodesArray& nodes,
       const std::vector<Real>& values,
       const region<Real>& reg,
       embedded_pair_result<Real>& result)
   {
     // Initialize fourth differences
-    std::fill(result.fourth_differences.begin(), 
-              result.fourth_differences.begin() + Dim, Real(0));
+    std::fill(result.directional_fourth_differences.begin(), 
+              result.directional_fourth_differences.begin() + Dim, Real(0));
     
     // Extract orbit values from the evaluated nodes
     // The nodes are ordered according to the Genz-Malik rule structure
@@ -314,7 +391,7 @@ private:
       
       // Fourth divided difference
       Real diff = std::abs(f3i - Real(2)*f1 - scale_factor*(f2i - Real(2)*f1));
-      result.fourth_differences[d] = diff;
+      result.directional_fourth_differences[d] = diff;
     }
     
     // Select dimension with largest weighted fourth difference
@@ -324,7 +401,7 @@ private:
     for (std::size_t d = 0; d < Dim; ++d) {
       Real width = reg.b[d] - reg.a[d];
       // Weight by width^5 to account for transformation scaling
-      Real weighted_diff = result.fourth_differences[d] * std::pow(width, Real(5));
+      Real weighted_diff = result.directional_fourth_differences[d] * std::pow(width, Real(5));
       
       if (weighted_diff > max_weighted_diff) {
         max_weighted_diff = weighted_diff;
@@ -332,27 +409,27 @@ private:
       }
     }
     
-    result.split_dimension = best_dim;
+    result.optimal_split_axis = best_dim;
   }
   
   
   /// \brief Apply safeguarding to prevent spuriously small errors
-  static void safeguard_error(embedded_pair_result<Real>& result)
+  static void apply_error_safeguarding(embedded_pair_result<Real>& result)
   {
     const Real machine_eps = std::numeric_limits<Real>::epsilon();
-    const Real safety_factor = Real(50); // Empirical from DCUHRE
+    const Real safety_factor = Real(boost::math::cubature::constants::dcuhre_empirical_safety_factor);
     
     // If embedded difference is too small relative to spread, use spread estimate
-    if (result.embedded_error < safety_factor * machine_eps * std::abs(result.estimate_fine)) {
-      if (result.spread_estimate > result.embedded_error) {
-        result.embedded_error = result.spread_estimate;
+    if (result.error_estimate < safety_factor * machine_eps * std::abs(result.primary_estimate)) {
+      if (result.variation_bound > result.error_estimate) {
+        result.error_estimate = result.variation_bound;
       }
     }
   }
   
   /// \brief Compute node-based spread statistics for reliability assessment
   template <std::size_t Dim>
-  static Real compute_node_spread(const std::vector<Real>& values)
+  static Real compute_function_value_spread(const std::vector<Real>& values)
   {
     if (values.size() < 2) {
       return Real(0);
@@ -400,7 +477,8 @@ public:
     using rule_fine = rule_fam<9, Dim, family_9_7>;
     using rule_coarse = rule_fam<7, Dim, family_9_7>;
     
-    if constexpr (!rule_fine::available || !rule_coarse::available) {
+    // Use runtime check for availability
+    if (!rule_fine::available || !rule_coarse::available) {
       return false;
     }
     
@@ -471,7 +549,7 @@ public:
   }
   
 private:
-  static void safeguard_error(embedded_pair_result<Real>& result) {
+  static void apply_error_safeguarding(embedded_pair_result<Real>& result) {
     genz_malik_evaluator<Real>::safeguard_error(result);
   }
 };

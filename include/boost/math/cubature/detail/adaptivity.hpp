@@ -293,9 +293,9 @@ public:
 template <typename Real>
 using two_sum_accumulator = kahan_accumulator<Real>;
 
-/// \brief Check convergence criteria
+/// \brief Check if error is within requested tolerance
 template <typename Real>
-bool check_convergence(Real error, Real integral, 
+bool is_converged_within_tolerance(Real error, Real integral, 
                       Real abs_tol, Real rel_tol) {
   return error <= std::max(abs_tol, rel_tol * std::abs(integral));
 }

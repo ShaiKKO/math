@@ -50,14 +50,28 @@ public:
     using rule_fine = raw_rule_fam<degree_fine, Dim, family_9_7>;
     using rule_coarse = raw_rule_fam<degree_coarse, Dim, family_9_7>;
     
-    if constexpr (!rule_fine::available || !rule_coarse::available) {
-      return false;
-    }
+    // Use SFINAE-based check instead of if constexpr
+    return evaluate_embedded_pair_impl<rule_fine, rule_coarse>(
+        f, reg, num_components, result, workspace, 
+        std::integral_constant<bool, rule_fine::available && rule_coarse::available>());
+  }
+  
+private:
+  // Implementation when rules are available
+  template <typename RuleFine, typename RuleCoarse, typename F, std::size_t Dim>
+  static bool evaluate_embedded_pair_impl(
+      const F& f,
+      const region<Real>& reg,
+      std::size_t num_components,
+      embedded_pair_result_vector<Real>& result,
+      workspace<Real>&,
+      std::true_type) // rules available
+  {
     
     // Get nodes and weights from raw rules (both have same size)
-    const auto nodes = rule_fine::template nodes_with_zero<Real>();
-    const auto weights_fine = rule_fine::template weights_with_zero<Real>();
-    const auto weights_coarse = rule_coarse::template weights_with_zero<Real>();
+    const auto nodes = RuleFine::template nodes_with_zero<Real>();
+    const auto weights_fine = RuleFine::template weights_with_zero<Real>();
+    const auto weights_coarse = RuleCoarse::template weights_with_zero<Real>();
     
     const std::size_t num_nodes = nodes.size();
     
@@ -120,17 +134,56 @@ public:
     }
     
     // Calculate fourth differences for axis selection
+    // Fourth differences estimate the directional variation of the integrand
+    // and guide the adaptive subdivision strategy
     if (orbit_values.size() >= 3 && Dim > 1) {
-      // Using simplified fourth difference formula
-      // Based on orbit structure: center, face points, edge points
-      const Real lambda_ratio = Real(7);  // (λ₃/λ₂)² for degree 7
+      // Genz-Malik fourth difference formula
+      // Based on symmetric orbit evaluations along each axis
+      
+      // The orbits are organized as:
+      // orbit_values[0] = center point
+      // orbit_values[1] = axis points with λ₁ 
+      // orbit_values[2] = axis points with λ₂
+      // orbit_values[3] = axis points with λ₃ (if degree 9)
+      
+      // For each dimension, compute fourth difference using symmetric pairs
+      // The formula approximates ∂⁴f/∂x_i⁴ using function values at
+      // points differing only in coordinate i
+      
+      const Real lambda1 = Real(0.955907315804538915L);  // Primary axis radius
+      const Real lambda2 = Real(0.406057174738239546L);   // Secondary axis radius
       
       for (std::size_t d = 0; d < Dim; ++d) {
         for (std::size_t c = 0; c < num_components; ++c) {
-          if (orbit_values.size() > 2) {
-            // Simplified: use difference between orbit evaluations
-            Real diff = std::abs(orbit_values[2][c] - orbit_values[0][c]);
-            fourth_diffs[d][c] = diff * std::pow(reg.b[d] - reg.a[d], 5);
+          if (orbit_values.size() >= 3) {
+            // Standard Genz-Malik fourth difference formula:
+            // D₄f ≈ (f(c+λ₂e_i) + f(c-λ₂e_i) - 2f(c)) / λ₂⁴
+            //       - (f(c+λ₁e_i) + f(c-λ₁e_i) - 2f(c)) / λ₁⁴
+            
+            // Note: In the simplified orbit storage, we have averaged values
+            // for each orbit, not individual axis points. For a proper
+            // implementation, we would need to store individual axis evaluations.
+            
+            // Extract center value
+            Real f_center = orbit_values[0][c];
+            
+            // For axis orbits, we have averaged values over all 2*Dim points
+            // This is an approximation - proper implementation would track
+            // individual axis point evaluations
+            Real f_axis1_avg = (orbit_values.size() > 1) ? orbit_values[1][c] : f_center;
+            Real f_axis2_avg = (orbit_values.size() > 2) ? orbit_values[2][c] : f_center;
+            
+            // Approximate fourth difference using orbit averages
+            // This assumes isotropy, which may not hold for all integrands
+            Real term1 = (f_axis2_avg - f_center) / std::pow(lambda2, 4);
+            Real term2 = (f_axis1_avg - f_center) / std::pow(lambda1, 4);
+            
+            // Scale by region width to get absolute variation estimate
+            Real width = reg.b[d] - reg.a[d];
+            fourth_diffs[d][c] = std::abs(term1 - term2) * std::pow(width, 4);
+            
+            // Add a small regularization term to avoid zero differences
+            fourth_diffs[d][c] += Real(1e-10) * std::abs(f_center) * width;
           }
         }
       }
@@ -154,6 +207,20 @@ public:
     return true;
   }
   
+  // Implementation when rules are not available
+  template <typename RuleFine, typename RuleCoarse, typename F, std::size_t Dim>
+  static bool evaluate_embedded_pair_impl(
+      const F&,
+      const region<Real>&,
+      std::size_t,
+      embedded_pair_result_vector<Real>&,
+      workspace<Real>&,
+      std::false_type) // rules not available
+  {
+    return false;
+  }
+  
+public:
   // Simplified version for dimensions where GM rules are available
   template <typename F>
   static bool evaluate_embedded_pair_runtime(

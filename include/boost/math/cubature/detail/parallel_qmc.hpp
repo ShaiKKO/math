@@ -14,6 +14,7 @@
 ///          Sobol index assignment and independent scrambling per thread.
 
 #include <boost/math/cubature/detail/parallel_executor.hpp>
+#include <boost/math/cubature/detail/sobol_owen.hpp>
 #include <boost/math/cubature/regions.hpp>
 #include <boost/math/cubature/policies.hpp>
 #include <boost/random/sobol.hpp>
@@ -121,7 +122,9 @@ private:
         
         // Initialize blocks with deterministic scramble seeds
         for (std::size_t t = 0; t < ranges.size(); ++t) {
-            auto [start, end] = ranges[t];
+            auto range = ranges[t];
+            auto start = range.first;
+            auto end = range.second;
             qmc_block<Real> block(start, end, t);
             
             if (use_scrambling_) {
@@ -239,18 +242,60 @@ private:
         return result;
     }
     
+    // SFINAE helper for function signature
+    template <typename Func, typename Point, typename = void>
+    struct integrand_sig {
+        static constexpr int value = 0;
+    };
+    
+    template <typename Func, typename Point>
+    struct integrand_sig<Func, Point,
+        typename std::enable_if<
+            std::is_convertible<decltype(std::declval<Func>()(std::declval<Point>())), Real>::value
+        >::type> {
+        static constexpr int value = 1; // vector
+    };
+    
+    template <typename Func, typename Point>
+    struct integrand_sig<Func, Point,
+        typename std::enable_if<
+            !std::is_convertible<decltype(std::declval<Func>()(std::declval<Point>())), Real>::value &&
+            std::is_convertible<decltype(std::declval<Func>()(std::declval<const Real*>(), std::declval<std::size_t>())), Real>::value
+        >::type> {
+        static constexpr int value = 2; // pointer + size
+    };
+    
+    template <typename Func, typename Point>
+    struct integrand_sig<Func, Point,
+        typename std::enable_if<
+            !std::is_convertible<decltype(std::declval<Func>()(std::declval<Point>())), Real>::value &&
+            !std::is_convertible<decltype(std::declval<Func>()(std::declval<const Real*>(), std::declval<std::size_t>())), Real>::value &&
+            std::is_convertible<decltype(std::declval<Func>()(std::declval<const Real*>())), Real>::value
+        >::type> {
+        static constexpr int value = 3; // pointer only
+    };
+    
+    // Tag dispatch evaluation
+    Real evaluate_dispatch(const std::vector<Real>& point, std::integral_constant<int, 0>) const {
+        static_assert(sizeof(F) == 0, "Integrand must be callable");
+        return Real(0);
+    }
+    
+    Real evaluate_dispatch(const std::vector<Real>& point, std::integral_constant<int, 1>) const {
+        return f_(point);
+    }
+    
+    Real evaluate_dispatch(const std::vector<Real>& point, std::integral_constant<int, 2>) const {
+        return f_(point.data(), Dim);
+    }
+    
+    Real evaluate_dispatch(const std::vector<Real>& point, std::integral_constant<int, 3>) const {
+        return f_(point.data());
+    }
+    
     /// \brief Evaluate integrand with proper signature detection
     Real evaluate_integrand(const std::vector<Real>& point) const {
-        if constexpr (std::is_invocable_v<F, decltype(point)>) {
-            return f_(point);
-        } else if constexpr (std::is_invocable_v<F, const Real*, std::size_t>) {
-            return f_(point.data(), Dim);
-        } else if constexpr (std::is_invocable_v<F, const Real*>) {
-            return f_(point.data());
-        } else {
-            static_assert(sizeof(F) == 0, "Integrand must be callable");
-            return Real(0);
-        }
+        return evaluate_dispatch(point, std::integral_constant<int, integrand_sig<F, decltype(point)>::value>());
     }
     
     /// \brief Tent transform for variance reduction
@@ -260,19 +305,8 @@ private:
     
     /// \brief Owen scrambling for randomized QMC
     static Real owen_scramble(Real u, std::uint32_t seed) {
-        // Simple digit scrambling (placeholder - full Owen scrambling is complex)
-        std::uint32_t bits = static_cast<std::uint32_t>(u * 
-                            std::numeric_limits<std::uint32_t>::max());
-        bits ^= seed;
-        
-        // Reverse bits for scrambling effect
-        bits = ((bits & 0xAAAAAAAA) >> 1) | ((bits & 0x55555555) << 1);
-        bits = ((bits & 0xCCCCCCCC) >> 2) | ((bits & 0x33333333) << 2);
-        bits = ((bits & 0xF0F0F0F0) >> 4) | ((bits & 0x0F0F0F0F) << 4);
-        bits = ((bits & 0xFF00FF00) >> 8) | ((bits & 0x00FF00FF) << 8);
-        bits = (bits >> 16) | (bits << 16);
-        
-        return Real(bits) / Real(std::numeric_limits<std::uint32_t>::max());
+        // Use full nested uniform Owen scrambling from sobol_owen.hpp
+        return detail::owen_scramble<Real>(u, seed);
     }
 };
 

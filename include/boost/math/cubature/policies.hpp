@@ -14,6 +14,7 @@
 
 #include <boost/math/policies/policy.hpp>
 #include <boost/math/policies/error_handling.hpp>
+#include <boost/math/cubature/constants.hpp>
 #include <cstdint>
 #include <limits>
 #include <type_traits>
@@ -82,19 +83,33 @@ struct reliability_metrics {
   }
   
   /// \brief Add iteration data for tracking convergence
-  void add_iteration(Real error, std::size_t evaluations) {
+  void add_iteration(Real error, std::size_t /*evaluations*/) {
     // Simple tracking - can be enhanced later
     error_ratio = error;
     regions_processed++;
   }
 };
 
-/// Result type returned by all algorithms
-/// - value: integral estimate
-/// - error: absolute error bound or standard error (QMC)
-/// - evaluations: number of integrand evaluations performed
-/// - status: status_code indicating outcome
-/// - reliability: error reliability metrics and convergence diagnostics
+/// \brief Result type returned by all integration algorithms
+/// 
+/// \details Encapsulates the integration result along with error estimates,
+///          performance metrics, and reliability indicators. This structure
+///          provides comprehensive diagnostics to assess integration quality.
+///
+/// \tparam Real Floating-point type used for computation
+///
+/// Members:
+/// - value: Estimated integral value
+/// - error: Conservative absolute error bound (adaptive) or standard error (QMC)
+/// - evaluations: Total number of integrand evaluations performed  
+/// - status: Integration outcome (success, maxeval_reached, etc.)
+/// - reliability: Advanced metrics for assessing error estimate reliability
+///
+/// \invariant error >= 0 (non-negative error estimate)
+/// \invariant evaluations > 0 if status == success
+/// 
+/// \see reliability_metrics for detailed convergence diagnostics
+/// \see status_code for possible integration outcomes
 template <class Real>
 struct result {
   Real value{};
@@ -213,11 +228,16 @@ inline bool check_dimension(
 /// \brief Policy-aware tolerance adjustment for multiprecision
 template <typename Real, typename Policy>
 struct tolerance_adjuster {
-  static Real adjust_absolute(Real tol, const Policy& /*pol*/) {
+  template <typename P = Policy>
+  static typename std::enable_if<precision_traits<P>::is_high_precision, Real>::type
+  adjust_absolute(Real tol, const Policy& /*pol*/) {
     // For high precision types, ensure tolerance is meaningful
-    if constexpr (precision_traits<Policy>::is_high_precision) {
-      return std::max(tol, std::numeric_limits<Real>::epsilon() * Real(100));
-    }
+    return std::max(tol, std::numeric_limits<Real>::epsilon() * Real(constants::machine_epsilon_safety_factor));
+  }
+  
+  template <typename P = Policy>
+  static typename std::enable_if<!precision_traits<P>::is_high_precision, Real>::type
+  adjust_absolute(Real tol, const Policy& /*pol*/) {
     return std::max(tol, std::numeric_limits<Real>::epsilon());
   }
   

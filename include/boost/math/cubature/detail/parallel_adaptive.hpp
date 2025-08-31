@@ -229,7 +229,9 @@ private:
         auto* pool = executor_.get_pool();
         
         for (std::size_t t = 0; t < ranges.size(); ++t) {
-            auto [start, end] = ranges[t];
+            auto range = ranges[t];
+            auto start = range.first;
+            auto end = range.second;
             
             auto promise = std::make_shared<std::promise<region_batch<Real>>>();
             futures.push_back(promise->get_future());
@@ -248,8 +250,10 @@ private:
                     
                     for (const auto& reg : thread_regions) {
                         // Bisect region
-                        auto [left, right] = bisect_region(reg, 
+                        auto bisect_result = bisect_region(reg, 
                             select_split_dimension(reg));
+                        auto left = bisect_result.first;
+                        auto right = bisect_result.second;
                         
                         // Evaluate children
                         embedded_pair_result<Real> left_result, right_result;
@@ -282,8 +286,10 @@ private:
                 batch.thread_id = t;
                 
                 for (const auto& reg : thread_regions) {
-                    auto [left, right] = bisect_region(reg, 
+                    auto bisect_result = bisect_region(reg, 
                         select_split_dimension(reg));
+                    auto left = bisect_result.first;
+                    auto right = bisect_result.second;
                     
                     embedded_pair_result<Real> left_result, right_result;
                     evaluate_region(left, left_result);

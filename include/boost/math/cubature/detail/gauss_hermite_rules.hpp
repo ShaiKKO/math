@@ -74,16 +74,18 @@ public:
                 x_old = x;
                 
                 // Evaluate H_n(x) and H'_n(x) using recurrence
-                Real H_prev = Real(1);
-                Real H = x * Real(2);
-                Real H_deriv = Real(2);
+                Real H_prev = Real(1);  // H_0
+                Real H = Real(2) * x;    // H_1
                 
+                // Build up to H_n
                 for (std::size_t k = 2; k <= n; ++k) {
                     Real H_next = Real(2) * x * H - Real(2 * (k - 1)) * H_prev;
                     H_prev = H;
                     H = H_next;
-                    H_deriv = Real(2 * k) * H_prev;
                 }
+                
+                // Derivative: H'_n(x) = 2n * H_{n-1}(x)
+                Real H_deriv = Real(2 * n) * H_prev;
                 
                 // Newton step
                 x = x_old - H / H_deriv;
@@ -254,14 +256,14 @@ struct gauss_hermite_rule_1d {
         : level(l), use_genz_keister(gk) 
     {
         if (use_genz_keister) {
-            auto [n, w] = genz_keister<Real>::get_rule(level);
-            nodes = std::move(n);
-            weights = std::move(w);
+            auto rule = genz_keister<Real>::get_rule(level);
+            nodes = std::move(rule.first);
+            weights = std::move(rule.second);
         } else {
             std::size_t n_points = gauss_hermite<Real>::num_points(level);
-            auto [n, w] = gauss_hermite<Real>::get_rule(n_points);
-            nodes = std::move(n);
-            weights = std::move(w);
+            auto rule = gauss_hermite<Real>::get_rule(n_points);
+            nodes = std::move(rule.first);
+            weights = std::move(rule.second);
         }
     }
     

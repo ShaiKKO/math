@@ -186,6 +186,61 @@ inline Real tent_transform(Real u) {
     return Real(1) - Real(2) * std::abs(u - Real(0.5));
 }
 
+// SFINAE helper for detecting integrand signature
+template <typename F, typename Point, typename = void>
+struct integrand_signature {
+    static constexpr int value = 0; // default: not callable
+};
+
+template <typename F, typename Point>
+struct integrand_signature<F, Point,
+    typename std::enable_if<
+        std::is_convertible<decltype(std::declval<F>()(std::declval<Point>())), typename Point::value_type>::value
+    >::type> {
+    static constexpr int value = 1; // accepts array/vector directly
+};
+
+template <typename F, typename Point>
+struct integrand_signature<F, Point,
+    typename std::enable_if<
+        !std::is_convertible<decltype(std::declval<F>()(std::declval<Point>())), typename Point::value_type>::value &&
+        std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>(), std::declval<std::size_t>())), typename Point::value_type>::value
+    >::type> {
+    static constexpr int value = 2; // accepts pointer + size
+};
+
+template <typename F, typename Point>
+struct integrand_signature<F, Point,
+    typename std::enable_if<
+        !std::is_convertible<decltype(std::declval<F>()(std::declval<Point>())), typename Point::value_type>::value &&
+        !std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>(), std::declval<std::size_t>())), typename Point::value_type>::value &&
+        std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>())), typename Point::value_type>::value
+    >::type> {
+    static constexpr int value = 3; // accepts pointer only
+};
+
+// Tag dispatch functions for evaluating integrand
+template <typename F, typename Point>
+inline typename Point::value_type evaluate_integrand(const F& f, const Point& point, std::integral_constant<int, 1>) {
+    return f(point);
+}
+
+template <typename F, typename Point>
+inline typename Point::value_type evaluate_integrand(const F& f, const Point& point, std::integral_constant<int, 2>) {
+    return f(point.data(), point.size());
+}
+
+template <typename F, typename Point>
+inline typename Point::value_type evaluate_integrand(const F& f, const Point& point, std::integral_constant<int, 3>) {
+    return f(point.data());
+}
+
+template <typename F, typename Point>
+inline typename Point::value_type evaluate_integrand(const F& f, const Point& point, std::integral_constant<int, 0>) {
+    static_assert(sizeof(F) == 0, "Integrand must be callable with array, pointer+size, or pointer");
+    return typename Point::value_type{};
+}
+
 // Helper to dispatch to correct Sobol dimension at compile time
 template <typename Real, typename F, std::size_t Dim>
 result<Real> integrate_qmc_impl_fixed_dim(
@@ -239,17 +294,8 @@ result<Real> integrate_qmc_impl_fixed_dim(
                 point[d] = box.lower[d] + u * (box.upper[d] - box.lower[d]);
             }
             
-            // Evaluate integrand
-            Real value;
-            if constexpr (std::is_invocable_v<F, decltype(point)>) {
-                value = f(point);
-            } else if constexpr (std::is_invocable_v<F, const Real*, std::size_t>) {
-                value = f(point.data(), Dim);
-            } else if constexpr (std::is_invocable_v<F, const Real*>) {
-                value = f(point.data());
-            } else {
-                static_assert(sizeof(F) == 0, "Integrand must be callable");
-            }
+            // Evaluate integrand using tag dispatch
+            Real value = evaluate_integrand(f, point, std::integral_constant<int, integrand_signature<F, decltype(point)>::value>());
             replicate_sum += value;
             ++total_evals;
         }

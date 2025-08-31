@@ -1746,11 +1746,31 @@ alias no_eh_tests :
    tools_workaround_incl_test
 ;
 
+#
+# Cubature library tests
+#
+test-suite cubature :
+   [ run cubature/test_adaptive_standalone.cpp : : : 
+     [ requires cxx11_auto_declarations cxx11_lambdas cxx11_smart_ptr cxx11_unified_initialization_syntax ] ]
+   [ run cubature/test_sparse_grid_standalone.cpp : : : 
+     [ requires cxx11_auto_declarations cxx11_lambdas cxx11_smart_ptr cxx11_unified_initialization_syntax ] ]
+   [ run cubature/test_transforms_standalone.cpp : : : 
+     [ requires cxx11_auto_declarations cxx11_lambdas cxx11_smart_ptr cxx11_unified_initialization_syntax ] ]
+   [ run cubature/test_qmc_standalone.cpp : : : 
+     [ requires cxx11_auto_declarations cxx11_lambdas cxx11_smart_ptr cxx11_unified_initialization_syntax cxx11_hdr_random ] ]
+   [ run simplex_test.cpp : : : 
+     [ requires cxx11_auto_declarations cxx11_lambdas cxx11_smart_ptr cxx11_unified_initialization_syntax ] ]
+   [ run gm_rules_exactness_test.cpp : : : 
+     [ requires cxx11_auto_declarations cxx11_lambdas cxx11_smart_ptr cxx11_unified_initialization_syntax ] ]
+   [ compile compile_test/cubature_api_compile.cpp :
+     [ requires cxx11_auto_declarations cxx11_lambdas cxx11_smart_ptr cxx11_unified_initialization_syntax ] ]
+;
+
 explicit no_eh_tests ;
 
 # Some aliases which group blocks of tests for CI testing:
 
 alias github_ci_block_1 : special_fun float128_tests distribution_tests mp misc concepts ;
-alias github_ci_block_2 : quadrature interpolators autodiff ../example//examples ../tools ;
+alias github_ci_block_2 : quadrature cubature interpolators autodiff ../example//examples ../tools ;
 explicit github_ci_block_1 ;
 explicit github_ci_block_2 ;

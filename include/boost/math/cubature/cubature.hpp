@@ -217,7 +217,9 @@ inline result<Real> integrate_adaptive_infinite(
                 switch(transform_types[inf_idx]) {
                     case infinite_transform_type::tangent: {
                         tangent_transform<Real> t;
-                        auto [xi, jac] = t.forward(ui);
+                        auto transform_result = t.forward(ui);
+                        auto xi = transform_result.first;
+                        auto jac = transform_result.second;
                         x[i] = xi;
                         jacobian *= jac;
                         break;
@@ -230,14 +232,18 @@ inline result<Real> integrate_adaptive_infinite(
                             Real u_rev = Real(1) - ui;
                             Real u_safe = std::min(u_rev, Real(1) - std::numeric_limits<Real>::epsilon());
                             u_safe = std::max(u_safe, std::numeric_limits<Real>::epsilon());
-                            auto [xi, jac] = t.forward(u_safe);
+                            auto transform_result = t.forward(u_safe);
+                            auto xi = transform_result.first;
+                            auto jac = transform_result.second;
                             x[i] = upper[i] - xi;
                             jacobian *= jac;
                         } else {
                             // Transform for [a, inf)
                             // Avoid exact u=1 which maps to infinity
                             Real u_safe = std::min(ui, Real(1) - std::numeric_limits<Real>::epsilon());
-                            auto [xi, jac] = t.forward(u_safe);
+                            auto transform_result = t.forward(u_safe);
+                            auto xi = transform_result.first;
+                            auto jac = transform_result.second;
                             x[i] = lower[i] + xi;
                             jacobian *= jac;
                         }
@@ -328,7 +334,9 @@ inline result<Real> integrate_sparse_grid_infinite(
                 switch(transform_types[inf_idx]) {
                     case infinite_transform_type::tangent: {
                         tangent_transform<Real> t;
-                        auto [xi, jac] = t.forward(ui);
+                        auto transform_result = t.forward(ui);
+                        auto xi = transform_result.first;
+                        auto jac = transform_result.second;
                         x[i] = xi;
                         jacobian *= jac;
                         break;
@@ -341,14 +349,18 @@ inline result<Real> integrate_sparse_grid_infinite(
                             Real u_rev = Real(1) - ui;
                             Real u_safe = std::min(u_rev, Real(1) - std::numeric_limits<Real>::epsilon());
                             u_safe = std::max(u_safe, std::numeric_limits<Real>::epsilon());
-                            auto [xi, jac] = t.forward(u_safe);
+                            auto transform_result = t.forward(u_safe);
+                            auto xi = transform_result.first;
+                            auto jac = transform_result.second;
                             x[i] = upper[i] - xi;
                             jacobian *= jac;
                         } else {
                             // Transform for [a, inf)
                             // Avoid exact u=1 which maps to infinity
                             Real u_safe = std::min(ui, Real(1) - std::numeric_limits<Real>::epsilon());
-                            auto [xi, jac] = t.forward(u_safe);
+                            auto transform_result = t.forward(u_safe);
+                            auto xi = transform_result.first;
+                            auto jac = transform_result.second;
                             x[i] = lower[i] + xi;
                             jacobian *= jac;
                         }

@@ -17,7 +17,7 @@
 namespace boost { namespace math { namespace cubature { namespace detail {
 
 /// \brief Memory pool for efficient region allocation during adaptive integration
-/// \details Staff+ level implementation to reduce allocation overhead when managing
+/// \details Implementation to reduce allocation overhead when managing
 ///          thousands of regions. Follows Boost.Pool design principles.
 template <typename T>
 class memory_pool {

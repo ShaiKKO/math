@@ -144,18 +144,7 @@ inline result<Real> integrate_sparse_grid_gaussian(
     bool use_genz_keister = false,
     Policy const& /*pol*/ = Policy{})
 {
-  // This would use Gauss-Hermite nodes instead of Clenshaw-Curtis
-  // Implementation deferred to separate PR for clarity
-  result<Real> res;
-  res.value = Real(0);
-  res.error = std::numeric_limits<Real>::max();
-  res.status = status_code::dimension_error;  // Not yet implemented
-  res.evaluations = 0;
-  
-  // TODO: Implement using gauss_hermite_rules.hpp
-  // Will construct sparse grid with Hermite nodes for Gaussian weight
-  
-  return res;
+  return detail::integrate_sparse_grid_gaussian_impl<Real>(f, dim, level, use_genz_keister);
 }
 
 }}} // namespace boost::math::cubature
