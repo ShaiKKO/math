@@ -369,19 +369,18 @@ private:
         return evaluator_type::template evaluate_embedded_pair<F, 8>(integrand_function_, reg, result, parent_cache);
       case 9:
         return evaluator_type::template evaluate_embedded_pair<F, 9>(integrand_function_, reg, result, parent_cache);
-      // Note: Rules for dimensions 10-15 are not yet implemented
-      // case 10:
-      //   return evaluator_type::template evaluate_embedded_pair<F, 10>(integrand_function_, reg, result, parent_cache);
-      // case 11:
-      //   return evaluator_type::template evaluate_embedded_pair<F, 11>(integrand_function_, reg, result, parent_cache);
-      // case 12:
-      //   return evaluator_type::template evaluate_embedded_pair<F, 12>(integrand_function_, reg, result, parent_cache);
-      // case 13:
-      //   return evaluator_type::template evaluate_embedded_pair<F, 13>(integrand_function_, reg, result, parent_cache);
-      // case 14:
-      //   return evaluator_type::template evaluate_embedded_pair<F, 14>(integrand_function_, reg, result, parent_cache);
-      // case 15:
-      //   return evaluator_type::template evaluate_embedded_pair<F, 15>(integrand_function_, reg, result, parent_cache);
+      case 10:
+        return evaluator_type::template evaluate_embedded_pair<F, 10>(integrand_function_, reg, result, parent_cache);
+      case 11:
+        return evaluator_type::template evaluate_embedded_pair<F, 11>(integrand_function_, reg, result, parent_cache);
+      case 12:
+        return evaluator_type::template evaluate_embedded_pair<F, 12>(integrand_function_, reg, result, parent_cache);
+      case 13:
+        return evaluator_type::template evaluate_embedded_pair<F, 13>(integrand_function_, reg, result, parent_cache);
+      case 14:
+        return evaluator_type::template evaluate_embedded_pair<F, 14>(integrand_function_, reg, result, parent_cache);
+      case 15:
+        return evaluator_type::template evaluate_embedded_pair<F, 15>(integrand_function_, reg, result, parent_cache);
       default:
         // For dimensions > 15, rules are not available
         return false;
