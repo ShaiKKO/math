@@ -13,6 +13,7 @@
 #include <boost/math/cubature/detail/genz_malik_evaluator.hpp>
 #include <boost/math/cubature/detail/memory_pool.hpp>
 #include <boost/math/cubature/detail/reliability_metrics.hpp>
+#include <boost/math/cubature/workspace.hpp>
 #include <vector>
 #include <array>
 #include <cmath>
@@ -87,11 +88,15 @@ private:
   // Genz-Malik evaluator
   using evaluator_type = genz_malik_evaluator<Real>;
   
+  // Optional workspace for buffer reuse
+  workspace<Real, Policy>* workspace_;
+  
 public:
   AdaptiveIntegrator(const F& integrand, const hypercube<Real>& domain,
                      Real absolute_tol, Real relative_tol,
                      std::size_t max_evaluations,
-                     const Policy& policy)
+                     const Policy& policy,
+                     workspace<Real, Policy>* ws = nullptr)
     : integrand_function_(integrand), 
       integration_domain_(domain), 
       absolute_tolerance_(absolute_tol), 
@@ -102,7 +107,8 @@ public:
       error_policy_(policy),
       total_evals_(0),
       num_regions_(0),
-      max_refinement_depth_(0)
+      max_refinement_depth_(0),
+      workspace_(ws)
   {
     // Configure memory pool for efficient region allocation
     typename memory_pool<region<Real>>::pool_config config;
@@ -110,6 +116,16 @@ public:
     config.growth_factor = 2;        // Double capacity when growing
     config.max_capacity = maximum_regions_ * 2;  // Allow some headroom
     region_pool_ = std::make_unique<memory_pool<region<Real>>>(config);
+    
+    // If workspace provided, reserve space for integration data
+    if (workspace_) {
+      workspace_->clear();  // Clear any previous data
+      std::size_t expected_regions = std::min(maximum_regions_, std::size_t(1000));
+      std::size_t dim = integration_domain_.dimension();
+      workspace_->region_centers.reserve(expected_regions * dim);
+      workspace_->region_widths.reserve(expected_regions * dim);
+      workspace_->region_errors.reserve(expected_regions);
+    }
   }
   
   result<Real> integrate() {

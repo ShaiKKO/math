@@ -15,6 +15,7 @@
 #include <boost/math/cubature/detail/adaptive_impl.hpp>
 #include <boost/math/cubature/detail/adaptive_integrator_vector.hpp>
 #include <boost/math/cubature/detail/vector_adapter.hpp>
+#include <boost/math/cubature/detail/parallel_adaptive.hpp>
 #include <vector>
 
 namespace boost { namespace math { namespace cubature {
@@ -112,10 +113,26 @@ inline result<Real> integrate_adaptive(const F& f, const hypercube<Real>& box,
                                        std::size_t max_eval = 0,
                                        Policy const& pol = Policy{})
 {
-  // For now, ignore execution options (parallelism will be added in P09)
-  // Just forward to main implementation
-  return integrate_adaptive<Real, F, Policy>(f, box, abs_tol, rel_tol, 
-                                             max_eval > 0 ? max_eval : ex.max_eval, pol);
+  // Use max_eval from parameter or execution options
+  std::size_t effective_max_eval = max_eval > 0 ? max_eval : ex.max_eval;
+  
+  // Check if parallel execution is requested
+  if (ex.max_threads > 1) {
+    // Use parallel adaptive integrator
+    detail::parallel_config config;
+    config.num_threads = ex.max_threads;
+    config.deterministic = ex.deterministic;
+    config.batch_size = 32;  // Default batch size
+    
+    detail::parallel_adaptive_integrator<Real, F, Policy> integrator(
+      f, box, abs_tol, rel_tol, effective_max_eval, config, pol);
+    
+    return integrator.integrate();
+  } else {
+    // Use sequential implementation
+    return integrate_adaptive<Real, F, Policy>(f, box, abs_tol, rel_tol, 
+                                               effective_max_eval, pol);
+  }
 }
 
 // Overload with workspace (for amortizing allocations)
@@ -129,13 +146,15 @@ template <class Real, class F, class Policy = default_policy
 #endif
 inline result<Real> integrate_adaptive(const F& f, const hypercube<Real>& box,
                                        Real abs_tol, Real rel_tol,
-                                       workspace<Real>& /*ws*/,
+                                       workspace<Real, Policy>& ws,
                                        std::size_t max_eval = 0,
                                        Policy const& pol = Policy{})
 {
-  // Workspace support will be added in P09
-  // For now, just forward to main implementation
-  return integrate_adaptive<Real, F, Policy>(f, box, abs_tol, rel_tol, max_eval, pol);
+  // Create integrator with workspace and run
+  detail::AdaptiveIntegrator<Real, F, Policy> integrator(
+    f, box, abs_tol, rel_tol, max_eval, pol, &ws);
+  
+  return integrator.integrate();
 }
 
 // Vector-valued integrand support
