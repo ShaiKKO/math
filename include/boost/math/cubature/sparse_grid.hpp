@@ -41,9 +41,11 @@ namespace boost { namespace math { namespace cubature {
 /// \param pol Boost.Math policy
 template <class Real, class F, class Policy = default_policy>
 inline result<Real> integrate_sparse_grid(const F& f, const hypercube<Real>& box,
-                                          unsigned level, Policy const& /*pol*/ = Policy{})
+                                          unsigned level, 
+                                          detail::quadrature_type qtype = detail::quadrature_type::clenshaw_curtis,
+                                          Policy const& /*pol*/ = Policy{})
 {
-  return detail::integrate_sparse_grid_impl<Real>(f, box, level);
+  return detail::integrate_sparse_grid_impl<Real>(f, box, level, qtype);
 }
 
 /// \brief Integrate with execution options and optional workspace

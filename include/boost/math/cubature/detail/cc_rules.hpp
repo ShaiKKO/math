@@ -13,6 +13,7 @@
 #include <cmath>
 #include <algorithm>
 #include <unordered_map>
+#include <boost/math/cubature/detail/gauss_patterson_nodes.hpp>
 // Remove boost constants dependency
 
 namespace boost { namespace math { namespace cubature { namespace detail {
@@ -223,16 +224,39 @@ public:
   };
 };
 
+/// \brief Quadrature rule type enumeration
+enum class quadrature_type {
+  clenshaw_curtis,
+  gauss_patterson,
+  gauss_legendre,
+  fejér
+};
+
 /// \brief 1D quadrature rule interface for tensor product construction
 template <typename Real>
 struct quadrature_rule_1d {
   std::vector<Real> nodes;
   std::vector<Real> weights;
   std::size_t level;
+  quadrature_type type;
   
-  quadrature_rule_1d(std::size_t l = 0) : level(l) {
-    nodes = clenshaw_curtis<Real>::get_nodes(level);
-    weights = clenshaw_curtis<Real>::get_weights(level);
+  quadrature_rule_1d(std::size_t l = 0, quadrature_type t = quadrature_type::clenshaw_curtis) 
+    : level(l), type(t) {
+    switch(type) {
+      case quadrature_type::clenshaw_curtis:
+        nodes = clenshaw_curtis<Real>::get_nodes(level);
+        weights = clenshaw_curtis<Real>::get_weights(level);
+        break;
+      case quadrature_type::gauss_patterson: {
+        auto gp_rule = gauss_patterson_nodes<Real>::get_nodes_weights(level);
+        nodes = std::move(gp_rule.first);
+        weights = std::move(gp_rule.second);
+        break;
+      }
+      default:
+        nodes = clenshaw_curtis<Real>::get_nodes(level);
+        weights = clenshaw_curtis<Real>::get_weights(level);
+    }
   }
   
   std::size_t size() const { return nodes.size(); }

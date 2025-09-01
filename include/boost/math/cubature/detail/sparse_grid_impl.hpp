@@ -363,6 +363,7 @@ private:
   sparse_node_set<Real> nodes_;
   std::vector<sparse_node<Real>> previous_level_nodes_;
   bool enable_diagnostics_;
+  quadrature_type quad_type_;
   
   // Diagnostic information
   struct diagnostic_info {
@@ -397,8 +398,11 @@ private:
   }
   
 public:
-  smolyak_grid(std::size_t dimension, std::size_t level, bool enable_diagnostics = false)
-    : dimension_(dimension), level_(level), enable_diagnostics_(enable_diagnostics) {
+  smolyak_grid(std::size_t dimension, std::size_t level, 
+               bool enable_diagnostics = false,
+               quadrature_type qtype = quadrature_type::clenshaw_curtis)
+    : dimension_(dimension), level_(level), enable_diagnostics_(enable_diagnostics),
+      quad_type_(qtype) {
     construct_grid();
   }
   
@@ -587,7 +591,7 @@ private:
     rules_1d.reserve(dimension_);
     
     for (std::size_t i = 0; i < dimension_; ++i) {
-      rules_1d.emplace_back(idx.indices[i]);
+      rules_1d.emplace_back(idx.indices[i], quad_type_);
     }
     
     // Generate tensor product nodes
@@ -660,6 +664,7 @@ result<Real> integrate_sparse_grid_impl(
     const F& f,
     const hypercube<Real>& box,
     std::size_t level,
+    quadrature_type qtype = quadrature_type::clenshaw_curtis,
     bool enable_diagnostics = false)
 {
   std::size_t dim = box.dimension();
@@ -672,8 +677,8 @@ result<Real> integrate_sparse_grid_impl(
     return res;
   }
   
-  // Construct and evaluate sparse grid
-  smolyak_grid<Real> grid(dim, level, enable_diagnostics);
+  // Construct and evaluate sparse grid with specified quadrature type
+  smolyak_grid<Real> grid(dim, level, enable_diagnostics, qtype);
   auto res = grid.evaluate(f, box);
   
   // Add warning if we detected issues
