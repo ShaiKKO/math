@@ -437,9 +437,13 @@ inline result<Real> integrate(
         return integrate_sparse_grid<Real>(f, box, level, pol);
     }
     
-    // For high dimensions, would use QMC (when fully implemented)
-    // For now, fall back to adaptive with limited evaluations
-    return integrate_adaptive<Real>(f, box, abs_tol, rel_tol, 1000000, pol);
+    // For high dimensions (>15), use QMC
+    // QMC is better suited for high dimensions due to better convergence rate
+    std::size_t n_points = static_cast<std::size_t>(
+        std::max(Real(10000), Real(1) / (rel_tol * rel_tol)));
+    n_points = std::min(n_points, std::size_t(1000000));  // Cap at 1M points
+    
+    return integrate_qmc<Real>(f, box, n_points, pol);
 }
 
 // Implementation details

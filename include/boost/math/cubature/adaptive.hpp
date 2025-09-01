@@ -15,7 +15,10 @@
 #include <boost/math/cubature/detail/adaptive_impl.hpp>
 #include <boost/math/cubature/detail/adaptive_integrator_vector.hpp>
 #include <boost/math/cubature/detail/vector_adapter.hpp>
+// Only include parallel support if Boost.Asio is available
+#ifdef BOOST_MATH_CUBATURE_HAS_PARALLEL
 #include <boost/math/cubature/detail/parallel_adaptive.hpp>
+#endif
 #include <vector>
 
 namespace boost { namespace math { namespace cubature {
@@ -117,6 +120,7 @@ inline result<Real> integrate_adaptive(const F& f, const hypercube<Real>& box,
   std::size_t effective_max_eval = max_eval > 0 ? max_eval : ex.max_eval;
   
   // Check if parallel execution is requested
+#ifdef BOOST_MATH_CUBATURE_HAS_PARALLEL
   if (ex.max_threads > 1) {
     // Use parallel adaptive integrator
     detail::parallel_config config;
@@ -133,6 +137,12 @@ inline result<Real> integrate_adaptive(const F& f, const hypercube<Real>& box,
     return integrate_adaptive<Real, F, Policy>(f, box, abs_tol, rel_tol, 
                                                effective_max_eval, pol);
   }
+#else
+  // Parallel support not available, use sequential implementation
+  (void)ex; // Suppress unused parameter warning
+  return integrate_adaptive<Real, F, Policy>(f, box, abs_tol, rel_tol, 
+                                             effective_max_eval, pol);
+#endif
 }
 
 // Overload with workspace (for amortizing allocations)

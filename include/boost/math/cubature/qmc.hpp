@@ -188,12 +188,12 @@ inline Real tent_transform(Real u) {
 
 // SFINAE helper for detecting integrand signature
 template <typename F, typename Point, typename = void>
-struct integrand_signature {
+struct qmc_integrand_signature {
     static constexpr int value = 0; // default: not callable
 };
 
 template <typename F, typename Point>
-struct integrand_signature<F, Point,
+struct qmc_integrand_signature<F, Point,
     typename std::enable_if<
         std::is_convertible<decltype(std::declval<F>()(std::declval<Point>())), typename Point::value_type>::value
     >::type> {
@@ -201,7 +201,7 @@ struct integrand_signature<F, Point,
 };
 
 template <typename F, typename Point>
-struct integrand_signature<F, Point,
+struct qmc_integrand_signature<F, Point,
     typename std::enable_if<
         !std::is_convertible<decltype(std::declval<F>()(std::declval<Point>())), typename Point::value_type>::value &&
         std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>(), std::declval<std::size_t>())), typename Point::value_type>::value
@@ -210,7 +210,7 @@ struct integrand_signature<F, Point,
 };
 
 template <typename F, typename Point>
-struct integrand_signature<F, Point,
+struct qmc_integrand_signature<F, Point,
     typename std::enable_if<
         !std::is_convertible<decltype(std::declval<F>()(std::declval<Point>())), typename Point::value_type>::value &&
         !std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>(), std::declval<std::size_t>())), typename Point::value_type>::value &&
@@ -236,7 +236,7 @@ inline typename Point::value_type evaluate_integrand(const F& f, const Point& po
 }
 
 template <typename F, typename Point>
-inline typename Point::value_type evaluate_integrand(const F& f, const Point& point, std::integral_constant<int, 0>) {
+inline typename Point::value_type evaluate_integrand(const F& /*f*/, const Point& /*point*/, std::integral_constant<int, 0>) {
     static_assert(sizeof(F) == 0, "Integrand must be callable with array, pointer+size, or pointer");
     return typename Point::value_type{};
 }
@@ -295,7 +295,7 @@ result<Real> integrate_qmc_impl_fixed_dim(
             }
             
             // Evaluate integrand using tag dispatch
-            Real value = evaluate_integrand(f, point, std::integral_constant<int, integrand_signature<F, decltype(point)>::value>());
+            Real value = evaluate_integrand(f, point, std::integral_constant<int, qmc_integrand_signature<F, decltype(point)>::value>());
             replicate_sum += value;
             ++total_evals;
         }

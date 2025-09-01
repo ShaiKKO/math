@@ -213,6 +213,7 @@ private:
 template <class Real, class F, class Policy = default_policy>
 inline result<Real> integrate_simplex(const F& f, const simplex<Real>& simp,
                                       Real abs_tol, Real rel_tol,
+                                      std::size_t max_eval = 0,
                                       Policy const& pol = Policy{})
 {
   // Validate simplex
@@ -255,21 +256,22 @@ inline result<Real> integrate_simplex(const F& f, const simplex<Real>& simp,
   std::fill(unit_cube.lower.begin(), unit_cube.lower.end(), Real(0));
   std::fill(unit_cube.upper.begin(), unit_cube.upper.end(), Real(1));
   
-  // Call adaptive integration backend
-  // Could also use sparse grid for smooth integrands
+  // Call adaptive integration backend with max_eval
+  std::size_t effective_max_eval = max_eval > 0 ? max_eval : 100000;
   return integrate_adaptive<Real>(transformed_f, unit_cube, abs_tol, rel_tol, 
-                                  100000, pol);
+                                  effective_max_eval, pol);
 }
 
 /// \brief Integrate over a simplex with execution options
 template <class Real, class F, class Policy = default_policy>
 inline result<Real> integrate_simplex(const F& f, const simplex<Real>& simp,
                                       Real abs_tol, Real rel_tol,
-                                      execution_options const& /*ex*/,
+                                      execution_options const& ex,
                                       Policy const& pol = Policy{})
 {
-  // For now, ignore execution options and forward to main implementation
-  return integrate_simplex<Real, F, Policy>(f, simp, abs_tol, rel_tol, pol);
+  // Forward to main implementation with max_eval from execution options
+  return integrate_simplex<Real, F, Policy>(f, simp, abs_tol, rel_tol, 
+                                            ex.max_eval, pol);
 }
 
 /// \brief Convenience function for 2D triangle integration

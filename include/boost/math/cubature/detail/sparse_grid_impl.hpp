@@ -287,44 +287,71 @@ private:
   }
 };
 
-// SFINAE helper for detecting integrand signature (shared by both grid classes)
-// Primary template defaults to 0 (invalid)
-template <typename Real, typename Func, typename Point, typename = void>
+// SFINAE helper for detecting integrand signature
+namespace detail_sfinae {
+  // Detection idiom helpers
+  template<class...> using void_t = void;
+  
+  template<class T, class = void>
+  struct has_vector_signature : std::false_type {};
+  
+  template<class T>
+  struct has_vector_signature<T, 
+      void_t<decltype(std::declval<T>()(std::declval<std::vector<typename T::Real>>()))>> 
+      : std::true_type {};
+  
+  template<class T, class Real, class = void>
+  struct has_pointer_size_signature : std::false_type {};
+  
+  template<class T, class Real>
+  struct has_pointer_size_signature<T, Real,
+      void_t<decltype(std::declval<T>()(std::declval<const Real*>(), std::declval<std::size_t>()))>>
+      : std::true_type {};
+  
+  template<class T, class Real, class = void>
+  struct has_pointer_signature : std::false_type {};
+  
+  template<class T, class Real>
+  struct has_pointer_signature<T, Real,
+      void_t<decltype(std::declval<T>()(std::declval<const Real*>()))>>
+      : std::true_type {};
+}
+
+// Simplified integrand traits with priority-based selection
+template <typename Real, typename Func, typename Point>
 struct integrand_traits {
-  static constexpr int signature = 0;
-};
-
-// Specialization for f(vector) signature
-template <typename Real, typename Func, typename Point>
-struct integrand_traits<Real, Func, Point,
-    typename std::enable_if<
-      std::is_same<Real, decltype(std::declval<const Func&>()(std::declval<const Point&>()))>::value
-    >::type> {
-  static constexpr int signature = 1;
-};
-
-// Specialization for f(pointer, size) signature - most common
-template <typename Real, typename Func, typename Point>
-struct integrand_traits<Real, Func, Point,
-    typename std::enable_if<
-      std::is_same<Real, decltype(std::declval<const Func&>()(
-        std::declval<const Real*>(), 
-        std::declval<std::size_t>()))>::value
-    >::type> {
-  static constexpr int signature = 2;
-};
-
-// Specialization for f(pointer) signature
-template <typename Real, typename Func, typename Point>
-struct integrand_traits<Real, Func, Point,
-    typename std::enable_if<
-      !std::is_same<Real, decltype(std::declval<const Func&>()(
-        std::declval<const Real*>(), 
-        std::declval<std::size_t>()))>::value &&
-      std::is_same<Real, decltype(std::declval<const Func&>()(
-        std::declval<const Real*>()))>::value
-    >::type> {
-  static constexpr int signature = 3;
+private:
+  // Helper to check if vector call is valid
+  template<typename F, typename P>
+  static auto test_vector(int) -> decltype(
+      Real(std::declval<const F&>()(std::declval<const P&>())), std::true_type{});
+  template<typename, typename>
+  static std::false_type test_vector(...);
+  
+  // Helper to check if pointer+size call is valid
+  template<typename F>
+  static auto test_ptr_size(int) -> decltype(
+      Real(std::declval<const F&>()(std::declval<const Real*>(), std::declval<std::size_t>())), std::true_type{});
+  template<typename>
+  static std::false_type test_ptr_size(...);
+  
+  // Helper to check if pointer call is valid
+  template<typename F>
+  static auto test_ptr(int) -> decltype(
+      Real(std::declval<const F&>()(std::declval<const Real*>())), std::true_type{});
+  template<typename>
+  static std::false_type test_ptr(...);
+  
+  static constexpr bool has_vector = decltype(test_vector<Func, Point>(0))::value;
+  static constexpr bool has_ptr_size = decltype(test_ptr_size<Func>(0))::value;
+  static constexpr bool has_ptr = decltype(test_ptr<Func>(0))::value;
+  
+public:
+  // Priority-based selection: vector > ptr+size > ptr
+  static constexpr int signature = 
+      has_vector ? 1 :
+      has_ptr_size ? 2 :
+      has_ptr ? 3 : 0;
 };
 
 /// \brief Smolyak sparse grid construction and integration
