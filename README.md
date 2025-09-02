@@ -93,6 +93,19 @@ and forward-mode automatic differentiation).
 
 The integration routines are usable for functions returning complex results - and hence can be used for computation of  contour integrals.
 
+### Multidimensional Integration (Cubature)
+
+A state-of-the-art library for multidimensional numerical integration, providing:
+
+* **Adaptive Integration**: Genz-Malik embedded rules with automatic error control for dimensions 2-15
+* **Sparse Grids**: Smolyak construction with Clenshaw-Curtis and Gauss-Patterson rules for moderate dimensions
+* **Quasi-Monte Carlo**: Multiple sequences (Sobol, Halton, Faure, Niederreiter, Lattice rules) with scrambling
+* **Monte Carlo**: Standard MC with variance reduction (antithetic variates, control variates, stratified sampling)
+* **Oscillatory Integration**: Filon and Levin methods for highly oscillatory integrands
+* **Infinite Domains**: Transform methods (tanh-sinh, algebraic) for unbounded regions
+
+The cubature library handles dimensions from 2 to 100+ with automatic method selection based on problem characteristics.
+
 ### Quaternions and Octonions
 
 Quaternion and Octonion are class templates similar to std::complex.

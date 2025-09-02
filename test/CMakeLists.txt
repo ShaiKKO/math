@@ -145,5 +145,48 @@ elseif (MSVC)
 endif()
 add_test(NAME adaptive_integration_test COMMAND adaptive_integration_test)
 
+# Infinite domain integration test
+add_executable(test_infinite_domain test_infinite_domain.cpp)
+target_include_directories(test_infinite_domain PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_features(test_infinite_domain PRIVATE cxx_std_17)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(test_infinite_domain PRIVATE -Wall -Wextra -Werror)
+elseif (MSVC)
+  target_compile_options(test_infinite_domain PRIVATE /W4 /WX)
+endif()
+add_test(NAME test_infinite_domain COMMAND test_infinite_domain)
+
+# QMC sequences test
+add_executable(test_qmc_sequences test_qmc_sequences.cpp)
+target_include_directories(test_qmc_sequences PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_features(test_qmc_sequences PRIVATE cxx_std_17)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(test_qmc_sequences PRIVATE -Wall -Wextra -Werror)
+elseif (MSVC)
+  target_compile_options(test_qmc_sequences PRIVATE /W4 /WX)
+endif()
+add_test(NAME test_qmc_sequences COMMAND test_qmc_sequences)
+
+# QMC benchmark program (not a test, just a benchmark executable)
+add_executable(benchmark_qmc benchmark_qmc.cpp)
+target_include_directories(benchmark_qmc PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_features(benchmark_qmc PRIVATE cxx_std_17)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(benchmark_qmc PRIVATE -Wall -Wextra)
+elseif (MSVC)
+  target_compile_options(benchmark_qmc PRIVATE /W4)
+endif()
+
+# Monte Carlo integration test
+add_executable(test_monte_carlo test_monte_carlo.cpp)
+target_include_directories(test_monte_carlo PRIVATE ${CMAKE_SOURCE_DIR}/include)
+target_compile_features(test_monte_carlo PRIVATE cxx_std_17)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+  target_compile_options(test_monte_carlo PRIVATE -Wall -Wextra)
+elseif (MSVC)
+  target_compile_options(test_monte_carlo PRIVATE /W4)
+endif()
+add_test(NAME test_monte_carlo COMMAND test_monte_carlo)
+
 
 

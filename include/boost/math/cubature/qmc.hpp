@@ -15,6 +15,7 @@
 #include <limits>
 #include <algorithm>
 #include <numeric>
+#include <type_traits>
 
 // Check for Boost.Random availability
 #ifndef BOOST_MATH_HAS_BOOST_RANDOM
@@ -37,8 +38,42 @@
 #include <boost/math/cubature/policies.hpp>
 #include <boost/math/cubature/regions.hpp>
 #include <boost/math/cubature/detail/sobol_owen.hpp>
+#include <boost/math/cubature/detail/qmc_sequences.hpp>
 
 namespace boost { namespace math { namespace cubature {
+
+/// \brief Options for QMC integration
+/// \details Controls sequence type and other parameters for QMC integration
+template <typename Real = double>
+struct qmc_options {
+    /// \brief Type of QMC sequence to use
+    detail::qmc_sequence_type sequence_type = detail::qmc_sequence_type::sobol;
+    
+    /// \brief Number of points for lattice rules (ignored for other sequences)
+    std::size_t lattice_points = 0;
+    
+    /// \brief Use scrambling for randomized QMC
+    bool use_scrambling = false;
+    
+    /// \brief Number of independent replicates for RQMC
+    std::size_t n_replicates = 10;
+    
+    /// \brief Random seed for scrambling
+    std::uint32_t scramble_seed = 0;
+    
+    /// \brief Apply tent transform for variance reduction
+    bool use_tent_transform = true;
+    
+    /// \brief Leap value for Halton sequence (1 = standard, >1 = leaped)
+    std::size_t halton_leap = 1;
+    
+    /// \brief Default constructor
+    qmc_options() = default;
+    
+    /// \brief Constructor for backward compatibility (Sobol-only)
+    qmc_options(bool scrambling, std::size_t replicates = 10)
+        : use_scrambling(scrambling), n_replicates(replicates) {}
+};
 
 /// \file qmc.hpp
 /// \brief Quasi-Monte Carlo integration with optional randomization
@@ -70,6 +105,14 @@ namespace detail {
       std::size_t n_points,
       bool use_scrambling,
       std::size_t n_replicates,
+      const Policy& pol);
+      
+  template <typename Real, typename F, typename Policy>
+  result<Real> integrate_qmc_impl_ex(
+      const F& f,
+      const hypercube<Real>& box,
+      std::size_t n_points,
+      const qmc_options<Real>& options,
       const Policy& pol);
       
   template <typename Real, typename F, typename Policy>
@@ -107,7 +150,12 @@ result<Real> integrate_qmc(
     std::size_t n_points,
     const Policy& pol = Policy{})
 {
-    return detail::integrate_qmc_impl<Real>(f, box, n_points, false, 1, pol);
+    // Use the new unified implementation via qmc_options
+    qmc_options<Real> opts;
+    opts.sequence_type = detail::qmc_sequence_type::sobol;
+    opts.use_scrambling = false;
+    opts.n_replicates = 1;
+    return detail::integrate_qmc_impl_ex<Real>(f, box, n_points, opts, pol);
 }
 
 /// \brief Integrate using Randomized Quasi-Monte Carlo (RQMC)
@@ -138,7 +186,38 @@ result<Real> integrate_rqmc(
     std::size_t n_replicates = 10,
     const Policy& pol = Policy{})
 {
-    return detail::integrate_qmc_impl<Real>(f, box, n_points, true, n_replicates, pol);
+    // Use the new unified implementation via qmc_options
+    qmc_options<Real> opts;
+    opts.sequence_type = detail::qmc_sequence_type::sobol;
+    opts.use_scrambling = true;
+    opts.n_replicates = n_replicates;
+    return detail::integrate_qmc_impl_ex<Real>(f, box, n_points, opts, pol);
+}
+
+/// \brief Integrate using QMC with configurable sequence type
+/// \details Uses specified QMC sequence type for integration with full control
+///          over all parameters including sequence type, scrambling, and replicates.
+///
+/// \tparam Real Floating-point type
+/// \tparam F Integrand type callable as f(const Real*, std::size_t) -> Real
+/// \tparam Policy Boost.Math policy type
+///
+/// \param f Integrand function
+/// \param box Integration domain (hypercube)
+/// \param n_points Number of QMC points (per replicate if using RQMC)
+/// \param options QMC options controlling sequence type and parameters
+/// \param pol Boost.Math policy object
+///
+/// \return result<Real> with integral estimate and error (if using RQMC)
+template <class Real, class F, class Policy = default_policy>
+result<Real> integrate_qmc_ex(
+    const F& f,
+    const hypercube<Real>& box,
+    std::size_t n_points,
+    const qmc_options<Real>& options,
+    const Policy& pol = Policy{})
+{
+    return detail::integrate_qmc_impl_ex<Real>(f, box, n_points, options, pol);
 }
 
 /// \brief Integrate vector-valued function using Quasi-Monte Carlo
@@ -187,58 +266,56 @@ inline Real tent_transform(Real u) {
 }
 
 // SFINAE helper for detecting integrand signature
+template <typename F, typename Real, typename = void>
+struct has_pointer_size_signature : std::false_type {};
+
+template <typename F, typename Real>
+struct has_pointer_size_signature<F, Real,
+    std::void_t<decltype(std::declval<F>()(std::declval<const Real*>(), std::declval<std::size_t>()))>>
+    : std::true_type {};
+
+template <typename F, typename Real, typename = void>
+struct has_pointer_signature : std::false_type {};
+
+template <typename F, typename Real>
+struct has_pointer_signature<F, Real,
+    std::void_t<decltype(std::declval<F>()(std::declval<const Real*>()))>>
+    : std::true_type {};
+
 template <typename F, typename Point, typename = void>
-struct qmc_integrand_signature {
-    static constexpr int value = 0; // default: not callable
-};
+struct has_vector_signature : std::false_type {};
 
 template <typename F, typename Point>
-struct qmc_integrand_signature<F, Point,
-    typename std::enable_if<
-        std::is_convertible<decltype(std::declval<F>()(std::declval<Point>())), typename Point::value_type>::value
-    >::type> {
-    static constexpr int value = 1; // accepts array/vector directly
-};
+struct has_vector_signature<F, Point,
+    std::void_t<decltype(std::declval<F>()(std::declval<Point>()))>>
+    : std::true_type {};
 
+// Unified integrand evaluation
 template <typename F, typename Point>
-struct qmc_integrand_signature<F, Point,
-    typename std::enable_if<
-        !std::is_convertible<decltype(std::declval<F>()(std::declval<Point>())), typename Point::value_type>::value &&
-        std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>(), std::declval<std::size_t>())), typename Point::value_type>::value
-    >::type> {
-    static constexpr int value = 2; // accepts pointer + size
-};
-
-template <typename F, typename Point>
-struct qmc_integrand_signature<F, Point,
-    typename std::enable_if<
-        !std::is_convertible<decltype(std::declval<F>()(std::declval<Point>())), typename Point::value_type>::value &&
-        !std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>(), std::declval<std::size_t>())), typename Point::value_type>::value &&
-        std::is_convertible<decltype(std::declval<F>()(std::declval<const typename Point::value_type*>())), typename Point::value_type>::value
-    >::type> {
-    static constexpr int value = 3; // accepts pointer only
-};
-
-// Tag dispatch functions for evaluating integrand
-template <typename F, typename Point>
-inline typename Point::value_type evaluate_integrand(const F& f, const Point& point, std::integral_constant<int, 1>) {
-    return f(point);
-}
-
-template <typename F, typename Point>
-inline typename Point::value_type evaluate_integrand(const F& f, const Point& point, std::integral_constant<int, 2>) {
-    return f(point.data(), point.size());
-}
-
-template <typename F, typename Point>
-inline typename Point::value_type evaluate_integrand(const F& f, const Point& point, std::integral_constant<int, 3>) {
-    return f(point.data());
-}
-
-template <typename F, typename Point>
-inline typename Point::value_type evaluate_integrand(const F& /*f*/, const Point& /*point*/, std::integral_constant<int, 0>) {
-    static_assert(sizeof(F) == 0, "Integrand must be callable with array, pointer+size, or pointer");
-    return typename Point::value_type{};
+inline auto evaluate_integrand_impl(const F& f, const Point& point) 
+    -> typename Point::value_type 
+{
+    using Real = typename Point::value_type;
+    
+    // Try pointer + size signature first (most common)
+    if constexpr (has_pointer_size_signature<F, Real>::value) {
+        return f(point.data(), point.size());
+    }
+    // Try pointer-only signature
+    else if constexpr (has_pointer_signature<F, Real>::value) {
+        return f(point.data());
+    }
+    // Try vector/array signature
+    else if constexpr (has_vector_signature<F, Point>::value) {
+        return f(point);
+    }
+    else {
+        static_assert(has_pointer_size_signature<F, Real>::value ||
+                     has_pointer_signature<F, Real>::value ||
+                     has_vector_signature<F, Point>::value,
+                     "Integrand must be callable with (const Real*, size_t), (const Real*), or vector<Real>");
+        return Real{};
+    }
 }
 
 // Helper to dispatch to correct Sobol dimension at compile time
@@ -294,8 +371,8 @@ result<Real> integrate_qmc_impl_fixed_dim(
                 point[d] = box.lower[d] + u * (box.upper[d] - box.lower[d]);
             }
             
-            // Evaluate integrand using tag dispatch
-            Real value = evaluate_integrand(f, point, std::integral_constant<int, qmc_integrand_signature<F, decltype(point)>::value>());
+            // Evaluate integrand
+            Real value = evaluate_integrand_impl(f, point);
             replicate_sum += value;
             ++total_evals;
         }
@@ -532,6 +609,166 @@ std::vector<result<Real>> integrate_qmc_vector_impl_fixed_dim(
     }
     return results;
 #endif
+}
+
+/// \brief Extended QMC implementation with configurable sequence types
+template <typename Real, typename F, typename Policy>
+result<Real> integrate_qmc_impl_ex(
+    const F& f,
+    const hypercube<Real>& box,
+    std::size_t n_points,
+    const qmc_options<Real>& options,
+    const Policy& /*pol*/)
+{
+    const std::size_t dim = box.dimension();
+    
+    // Validate inputs
+    if (dim == 0) {
+        result<Real> res;
+        res.status = status_code::dimension_error;
+        res.error = std::numeric_limits<Real>::max();
+        res.value = 0;
+        res.evaluations = 0;
+        return res;
+    }
+    
+    if (n_points == 0) {
+        result<Real> res;
+        res.status = status_code::invalid_input;
+        res.error = std::numeric_limits<Real>::max();
+        res.value = 0;
+        res.evaluations = 0;
+        return res;
+    }
+    
+    // Storage for replicate values (for RQMC variance estimation)
+    std::vector<Real> replicate_values;
+    if (options.use_scrambling && options.n_replicates > 1) {
+        replicate_values.reserve(options.n_replicates);
+    }
+    
+    // Main QMC integration loop
+    Real total_sum = 0;
+    std::size_t total_evals = 0;
+    
+    // Compute hypercube volume
+    Real volume = 1.0;
+    for (std::size_t d = 0; d < dim; ++d) {
+        volume *= (box.upper[d] - box.lower[d]);
+    }
+    
+    for (std::size_t rep = 0; rep < options.n_replicates; ++rep) {
+        // Create QMC sequence based on options
+        std::unique_ptr<qmc_sequence_base<Real>> sequence;
+        
+        if (options.sequence_type == qmc_sequence_type::lattice_rank1) {
+            // Lattice rules need the total number of points
+            sequence = create_qmc_sequence<Real>(
+                options.sequence_type, dim, options.lattice_points > 0 ? options.lattice_points : n_points);
+        } else {
+            sequence = create_qmc_sequence<Real>(
+                options.sequence_type, dim);
+        }
+        
+        // Special handling for Halton leap
+        if (options.sequence_type == qmc_sequence_type::halton && options.halton_leap > 1) {
+            auto* halton = dynamic_cast<halton_sequence<Real>*>(sequence.get());
+            if (halton) {
+                halton->set_leap(options.halton_leap);
+            }
+        }
+        
+        // Apply scrambling if requested
+        if (options.use_scrambling) {
+            std::uint32_t scramble_seed = options.scramble_seed;
+            if (scramble_seed == 0) {
+                // Generate different seed for each replicate
+                scramble_seed = static_cast<std::uint32_t>(rep * 65521 + 32749);
+            }
+            
+            // For lattice rules, apply random shift
+            if (options.sequence_type == qmc_sequence_type::lattice_rank1) {
+                auto* lattice = dynamic_cast<lattice_rank1_sequence<Real>*>(sequence.get());
+                if (lattice) {
+                    std::mt19937 rng(scramble_seed);
+                    lattice->apply_random_shift(rng);
+                }
+            } else {
+                // For digital sequences, apply Owen scrambling
+                sequence = std::make_unique<scrambled_sequence<Real>>(
+                    std::move(sequence), scramble_seed);
+            }
+        }
+        
+        // Accumulate QMC sum for this replicate
+        Real replicate_sum = 0;
+        std::vector<Real> point(dim);
+        
+        // Determine actual number of points for this sequence type
+        std::size_t actual_n_points = n_points;
+        if (options.sequence_type == qmc_sequence_type::lattice_rank1) {
+            actual_n_points = options.lattice_points > 0 ? options.lattice_points : n_points;
+        }
+        
+        for (std::size_t i = 0; i < actual_n_points; ++i) {
+            // Check if sequence has more points (relevant for lattice rules)
+            if (!sequence->has_next()) {
+                break;
+            }
+            
+            // Generate next QMC point
+            auto qmc_point = sequence->next();
+            
+            // Apply tent transform if requested
+            for (std::size_t d = 0; d < dim; ++d) {
+                Real u = qmc_point[d];
+                
+                if (options.use_tent_transform) {
+                    u = tent_transform(u);
+                }
+                
+                // Map from [0,1] to [a,b]
+                point[d] = box.lower[d] + u * (box.upper[d] - box.lower[d]);
+            }
+            
+            // Evaluate integrand
+            Real value = evaluate_integrand_impl(f, point);
+            replicate_sum += value;
+            ++total_evals;
+        }
+        
+        // Scale by volume / actual_n_points
+        replicate_sum = (replicate_sum * volume) / Real(actual_n_points);
+        
+        if (options.use_scrambling && options.n_replicates > 1) {
+            replicate_values.push_back(replicate_sum);
+        }
+        total_sum += replicate_sum;
+    }
+    
+    // Prepare result
+    result<Real> res;
+    res.evaluations = total_evals;
+    res.status = status_code::success;
+    
+    if (options.use_scrambling && options.n_replicates > 1) {
+        res.value = total_sum / Real(options.n_replicates);
+        
+        // Compute standard error
+        Real mean = res.value;
+        Real variance = 0;
+        for (const auto& val : replicate_values) {
+            Real diff = val - mean;
+            variance += diff * diff;
+        }
+        variance /= Real(options.n_replicates - 1);
+        res.error = Real(2) * std::sqrt(variance / Real(options.n_replicates));
+    } else {
+        res.value = total_sum / Real(options.n_replicates);
+        res.error = 0;
+    }
+    
+    return res;
 }
 
 /// \brief QMC vector implementation with optional randomization

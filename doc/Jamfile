@@ -1,0 +1,45 @@
+# Copyright (c) 2025 Boost.Math Contributors
+# Distributed under the Boost Software License, Version 1.0.
+# (See accompanying file LICENSE_1_0.txt or copy at
+# http://www.boost.org/LICENSE_1_0.txt)
+
+project boost/math/doc/cubature ;
+
+import boostbook ;
+import quickbook ;
+import modules ;
+
+path-constant images : html/images ;
+
+xml cubature_doc : cubature.qbk ;
+
+boostbook standalone
+    :
+        cubature_doc
+    :
+        <xsl:param>boost.root=../../../../..
+        <xsl:param>chunk.section.depth=2
+        <xsl:param>chunk.first.sections=1
+        <xsl:param>toc.section.depth=2
+        <xsl:param>toc.max.depth=2
+        <xsl:param>generate.section.toc.level=2
+        <xsl:param>nav.layout=none
+        <xsl:param>boost.image.src=images/boost.png
+        <xsl:param>boost.image.alt="\"Boost C++ Libraries\""
+        <xsl:param>boost.image.w=277
+        <xsl:param>boost.image.h=86
+        <xsl:param>boost.graphics.root=images/
+        
+        <format>html:<xsl:param>boost.mathjax=1
+        <format>html:<xsl:param>html.stylesheet=boostbook.css
+        
+        <format>pdf:<xsl:param>xep.extensions=1
+        <format>pdf:<xsl:param>fop1.extensions=0
+        <format>pdf:<xsl:param>fop.extensions=0
+        <format>pdf:<xsl:param>body.start.indent=0pt
+        <format>pdf:<xsl:param>page.margin.inner=0.5in
+        <format>pdf:<xsl:param>page.margin.outer=0.5in
+    ;
+
+install html : ../../../doc/html/boostbook.css ;
+install ../ : ../../../boost.png ;

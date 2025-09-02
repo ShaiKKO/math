@@ -1,0 +1,26 @@
+[/
+Copyright (c) 2025 Boost.Math Contributors
+Distributed under the Boost Software License, Version 1.0.
+]
+
+[article Boost.Math Cubature Documentation
+    [quickbook 1.7]
+    [id boost_math_cubature]
+    [copyright 2025 Boost.Math Contributors]
+    [license
+        Distributed under the Boost Software License, Version 1.0.
+        (See accompanying file LICENSE_1_0.txt or copy at
+        [@http://www.boost.org/LICENSE_1_0.txt])
+    ]
+    [authors [Boost.Math Contributors]]
+    [source-mode c++]
+]
+
+[/ Sections ]
+[include cubature.qbk]
+[include cubature_overview.qbk]
+[include cubature_tutorial.qbk]
+[include cubature_reference.qbk]
+[include cubature_examples.qbk]
+[include cubature_performance.qbk]
+[include cubature_faq.qbk]

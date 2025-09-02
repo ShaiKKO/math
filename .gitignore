@@ -31,10 +31,17 @@ build.ninja
 a.out
 
 # Local docs outputs (Doxygen/Quickbook/Sphinx/etc.)
-/docs/
-/docs/build/
-/docs/html/
-/docs/output/
 /doc/html/
 **/Doxyfile.user
 **/doxygen/*
+
+# Development/debug files
+debug_*.cpp
+test_*_simple
+test_*_simple.cpp
+test_*_compile
+test_*_compile.cpp
+benchmark_*
+example_*
+*.dSYM/
+shaiko/
