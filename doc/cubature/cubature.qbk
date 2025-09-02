@@ -132,8 +132,8 @@ box.upper = {1, 1, 1};
 std::vector<double> lower = {-1, -1};
 std::vector<double> upper = {1, 1};
 hypercube<double> box2(2);
-box2.a = lower;
-box2.b = upper;
+box2.lower = lower;
+box2.upper = upper;
 
 // Infinite domains (handled by transform methods)
 // Semi-infinite: [0, ∞)
@@ -158,12 +158,13 @@ box2.b = upper;
 Best for low-dimensional smooth functions requiring high accuracy:
 
 ``
-auto [result, error] = integrate_adaptive(
+auto result = integrate_adaptive(
     f,                    // integrand
     box,                  // domain
     1e-9,                 // relative tolerance
     1e-9                  // absolute tolerance
 );
+// Access result.value and result.error
 ``
 
 [h4 Sparse Grid]
@@ -338,8 +339,8 @@ auto gaussian = [](const double* x, std::size_t) {
 };
 
 hypercube<double> box(2);
-box.a = {-2, -2};
-box.b = {2, 2};
+box.lower = {-2, -2};
+box.upper = {2, 2};
 
 auto result = integrate_adaptive(gaussian, box, 1e-9, 1e-12);
 // result.value: π(1 - e^(-4)) ≈ 3.084
@@ -786,32 +787,6 @@ std::cout << "Log marginal likelihood: " << std::log(marginal_lik) << std::endl;
 
 [endsect] [/examples]
 
-[section:comparison Comparison with Other Libraries]
-
-[table Feature Comparison
-    [[Feature] [Boost.Math/Cubature] [CUBA] [GSL] [HIntLib]]
-    [[Language] [C++ (header-only)] [C/Fortran] [C] [C++]]
-    [[Adaptive integration] [✓ (Genz-Malik)] [✓ (Cuhre)] [✓] [✓]]
-    [[Sparse grids] [✓ (Multiple rules)] [✗] [✗] [✓]]
-    [[QMC sequences] [✓ (5 types)] [✗] [✓ (Sobol)] [✓]]
-    [[Monte Carlo] [✓ (with VR)] [✓ (Vegas)] [✓] [✗]]
-    [[Oscillatory] [✓ (Filon/Levin)] [✗] [✓ (QAWO)] [✗]]
-    [[Infinite domains] [✓ (Transforms)] [✗] [✓ (QAGI)] [✗]]
-    [[Max dimension] [Unlimited] [~1000] [~40] [Unlimited]]
-    [[Templates] [✓] [✗] [✗] [✓]]
-    [[Precision] [float/double/long] [double] [double] [double]]
-]
-
-[h4 Advantages of Boost.Math/Cubature]
-
-* [*Header-only]: No linking required, easy integration
-* [*Modern C++]: Template-based, works with any precision type
-* [*Comprehensive]: All major integration methods in one library
-* [*Extensible]: Easy to add custom rules and methods
-* [*Well-tested]: Extensive test suite with Genz functions
-* [*Documentation]: Complete user guide and reference
-
-[endsect] [/comparison]
 
 [section:acknowledgments Acknowledgments]
 
